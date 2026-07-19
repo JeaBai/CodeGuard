@@ -1,0 +1,7 @@
+.codebuddy/plans/
+.codebuddy/settings.local.json
+test_large/
+test_compare/
+__pycache__/
+*.pyc
+.DS_Store
