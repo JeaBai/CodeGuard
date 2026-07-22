@@ -194,6 +194,26 @@ RESOURCES = [
 # Tool 处理器
 # ============================================================
 
+# project_root 由 main() 在启动时设置
+_PROJECT_ROOT = None
+
+def set_project_root(path):
+    """设置项目根目录（由 main() 调用）"""
+    global _PROJECT_ROOT
+    _PROJECT_ROOT = os.path.abspath(path)
+
+def _is_safe_path(file_path):
+    """检查文件路径是否在项目根目录内（防止路径遍历攻击）"""
+    if _PROJECT_ROOT is None:
+        return True  # 未设置项目根目录时允许（向后兼容 CLI 模式）
+    try:
+        real_file = os.path.realpath(os.path.abspath(file_path))
+        real_root = os.path.realpath(_PROJECT_ROOT)
+        return os.path.commonpath([real_file, real_root]) == real_root
+    except Exception:
+        return False
+
+
 def handle_review_file(params):
     """处理 review_file 请求"""
     file_path = params.get("file_path", "")
@@ -201,6 +221,23 @@ def handle_review_file(params):
     
     if not file_path or not os.path.isfile(file_path):
         return create_error(None, -32602, f"Invalid file_path: {file_path}")
+    
+    # 路径沙箱检查（防止目录遍历攻击）
+    if not _is_safe_path(file_path):
+        return create_error(None, -32602, f"Access denied: file_path is outside project root")
+    
+    # 文件类型感知：先分类，按类型决定检测策略（v2.0.2: 修复 file_type 未传递）
+    file_type = _classify_file(file_path)
+    
+    # 生成代码/文档：直接跳过，返回空结果
+    if file_type in ("generated", "doc"):
+        return {
+            "issues": [],
+            "file_type": file_type,
+            "summary": {"total_issues": 0, "blocks": 0, "warnings": 0, "info": 0, "avg_confidence": 0},
+            "exit_code": 0,
+            "note": f"跳过 {file_type} 类型文件"
+        }
     
     # 单文件检测
     collector = quality_check.IssueCollector()
@@ -223,9 +260,6 @@ def handle_review_file(params):
     # 架构检测和重复检测需要多文件，单文件跳过
     if mode == "team":
         quality_check.check_naming_consistency([file_path], collector)
-    
-    # 文件类型感知：按类型调整规则
-    file_type = _classify_file(file_path)
     
     return {
         "issues": [
@@ -448,8 +482,9 @@ def handle_request(request):
                     "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, indent=2)}]
                 })
             except Exception as e:
-                return create_error(req_id, -32603, f"Tool execution error: {e}",
-                                   {"traceback": traceback.format_exc()})
+                sys.stderr.write(f"[CodeGuard MCP] Tool execution error: {e}\n{traceback.format_exc()}\n")
+                sys.stderr.flush()
+                return create_error(req_id, -32603, f"Tool execution error: {e}")
         return create_error(req_id, -32601, f"Unknown tool: {tool_name}")
 
     # 资源读取
@@ -471,8 +506,10 @@ def main():
     parser.add_argument("--project-root", default=".", help="项目根目录")
     args = parser.parse_args()
     
-    # 切换到项目目录
-    os.chdir(os.path.abspath(args.project_root))
+    # 切换到项目目录并设置路径沙箱根
+    root_abs = os.path.abspath(args.project_root)
+    os.chdir(root_abs)
+    set_project_root(root_abs)
     
     # 写入 stderr 避免污染 stdio 通道
     sys.stderr.write(f"[CodeGuard MCP] Starting v{SERVER_VERSION} on {args.project_root}\n")

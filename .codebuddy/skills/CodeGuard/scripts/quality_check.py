@@ -425,18 +425,18 @@ def _check_class(node, filepath, collector, file_type="source"):
                       "检查是否违反单一职责原则，考虑拆分",
                       confidence=85)
     
-    # 类代码行数（AST 精确，置信度 88）
+    # 类代码行数（AST 精确，置信度 85）
     class_lines = node.end_lineno - node.lineno + 1 if node.end_lineno else 0
     if class_lines > THRESHOLDS["max_class_lines_block"]:
         collector.add("block", "class_size", filepath, node.lineno,
                       f"类 '{class_name}' 代码行数 {class_lines} > {THRESHOLDS['max_class_lines_block']}（阻塞）",
                       "拆分为多个职责单一的类",
-                      confidence=88)
+                      confidence=85)
     elif class_lines > THRESHOLDS["max_class_lines_warn"]:
         collector.add("warn", "class_size", filepath, node.lineno,
                       f"类 '{class_name}' 代码行数 {class_lines} > {THRESHOLDS['max_class_lines_warn']}（警告）",
                       "检查是否违反单一职责原则",
-                      confidence=88)
+                      confidence=85)
 
 
 def _check_security(content, filepath, collector):
@@ -497,19 +497,39 @@ def _check_security(content, filepath, collector):
 
 
 def _check_empty_except(content, filepath, collector, file_type="source"):
-    """检测空的或过于简单的异常处理（置信度 82）"""
+    """检测空的或过于简单的异常处理（v2.0.2: 同行检测 + 多行支持）"""
     lines = content.split("\n")
     
-    # 匹配 except 块后紧跟 pass 或只有 print
     in_except = False
     except_line = 0
+    except_indent = 0
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
+        
+        # 同行检测：except SomeError: pass 或 except: pass
         if re.match(r'except\b', stripped):
+            # 检查同行尾部是否为空体
+            rest = re.sub(r'^.*:\s*', '', stripped)
+            if rest in ("pass", "") or stripped.endswith(": pass"):
+                collector.add("warn", "error_handling", filepath, i,
+                              "异常处理过于简单（except 行直接 pass）",
+                              "添加适当的日志记录和错误处理逻辑",
+                              confidence=82)
+                continue
             in_except = True
             except_line = i
+            except_indent = len(line) - len(line.lstrip())
             continue
+        
         if in_except:
+            current_indent = len(line) - len(line.lstrip())
+            # 空行跳过
+            if stripped == "":
+                continue
+            # 缩进退回（跳出 except 块）
+            if current_indent <= except_indent:
+                in_except = False
+                continue
             if stripped in ("pass", "") or re.match(r'print\s*\(', stripped):
                 collector.add("warn", "error_handling", filepath, except_line,
                               "异常处理过于简单（pass 或仅 print）",
@@ -901,30 +921,40 @@ def _compute_nesting_regex(content, ext):
     if ext not in LANG_NESTING_KEYWORDS:
         return 0
     
-    stripped = _strip_comments_and_strings(content, ext)
+    stripped_content = _strip_comments_and_strings(content, ext)
     nesting_kw = LANG_NESTING_KEYWORDS[ext]
-    lines = stripped.split('\n')
+    lines = stripped_content.split('\n')
     max_depth = 0
     current_depth = 0
+    pending_depth = 0  # v2.0.2: 单语句控制流深度暂存
     
     for line in lines:
-        stripped = line.strip()
+        line_content = line.strip()
         # 忽略注释和空行
-        if not stripped or stripped.startswith('//') or stripped.startswith('#'):
+        if not line_content or line_content.startswith('//') or line_content.startswith('#'):
             continue
         
-        # 计算当前行的净深度变化
-        opens = len(re.findall(r'\{', stripped))
-        closes = len(re.findall(r'\}', stripped))
+        # 计算当前行的净深度变化（v2.0.2: 修复变量遮蔽 + 单语句体支持）
+        opens = len(re.findall(r'\{', line_content))
+        closes = len(re.findall(r'\}', line_content))
         
-        if re.search(nesting_kw, stripped, re.IGNORECASE):
-            # 在以 if/for/switch 等关键词开头的行的下一行开始深度+1
-            if '{' in stripped:
+        # 先结算上轮的待定深度（单语句体不会增加 { 但会增加嵌套）
+        current_depth += pending_depth
+        pending_depth = 0
+        
+        if re.search(nesting_kw, line_content, re.IGNORECASE):
+            if '{' in line_content:
+                # 关键词行有 { → 正常处理大括号
                 current_depth += opens
-                # 同一行有 { 和 } 的情况
                 current_depth -= closes
+            else:
+                # 单语句控制流（如 if(x) doSomething();）→ 暂定深度+1
+                pending_depth = 1
         else:
             current_depth += opens - closes
+            # 如果本行关闭了所有大括号，待定深度也一并结算
+            if current_depth <= 0:
+                pending_depth = 0
         
         current_depth = max(0, current_depth)
         max_depth = max(max_depth, current_depth)
@@ -1198,7 +1228,7 @@ def _check_file_size(loc, filepath, collector):
 
 
 def check_generic_file(filepath, collector, ext):
-    """对非主流语言执行通用质量检测（文件大小、安全）"""
+    """对非主流语言执行通用质量检测（v2.0.2: 增加 CC/params 正则检测）"""
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
@@ -1209,6 +1239,30 @@ def check_generic_file(filepath, collector, ext):
     loc = count_lines_of_code(content)
     _check_file_size(loc, filepath, collector)
     _check_security(content, filepath, collector)
+    
+    # CC 和参数数量正则检测（对支持的语言）
+    if ext in LANG_CC_PATTERNS:
+        cc = _compute_cc_regex(content, ext)
+        if cc > THRESHOLDS["cyclomatic_complexity_block"]:
+            collector.add("block", "complexity_regex", filepath, 0,
+                          f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
+                          "拆分为多个小函数", confidence=80)
+        elif cc > THRESHOLDS["cyclomatic_complexity_warn"]:
+            collector.add("warn", "complexity_regex", filepath, 0,
+                          f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_warn']}(警告)",
+                          "考虑拆分", confidence=80)
+    
+    if ext in LANG_PARAM_PATTERNS:
+        params = _count_params_regex(content, ext)
+        for (func_name, line), count in params.items():
+            if count > THRESHOLDS["max_function_params_block"]:
+                collector.add("block", "params_regex", filepath, line,
+                              f"函数 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_block']}(阻塞)",
+                              "封装为参数对象", confidence=80)
+            elif count > THRESHOLDS["max_function_params_warn"]:
+                collector.add("warn", "params_regex", filepath, line,
+                              f"函数 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_warn']}(警告)",
+                              "考虑使用参数对象", confidence=80)
     
     # 通用异常处理检测（多语言支持）
     if ext in (".py", ".js", ".ts", ".java", ".cs", ".go", ".rs", ".cpp", ".c", ".h"):
@@ -1233,7 +1287,10 @@ def _check_empty_except_generic(content, filepath, collector, ext):
         empty_body = ("{}", "", "// TODO")
     elif ext == ".go":
         except_pattern = re.compile(r'if\s+err\s*!=\s*nil')
-        empty_body = ("return",)
+        # Go 惯用错误处理: return err / return nil, err / return ... , err / log.Fatal
+        _go_err_return = ("return", "return err", "return nil", "return nil, err",
+                          "return 0, err", "return false, err", "return \"\", err")
+        empty_body = _go_err_return
     elif ext in (".rs", ".cpp", ".c", ".h"):
         except_pattern = re.compile(r'catch\b')
         empty_body = ("{}", "")
@@ -1260,7 +1317,7 @@ def _check_empty_except_generic(content, filepath, collector, ext):
             continue
         if in_handler:
             if stripped in empty_body or re.match(r'print\s*\(', stripped) or \
-               (ext == ".go" and stripped in ("return", "return nil", "return err")):
+               (ext == ".go" and any(stripped.startswith(p) for p in _go_err_return)):
                 collector.add("warn", "error_handling", filepath, handler_line,
                               "异常处理过于简单",
                               "添加适当的日志记录和错误处理逻辑",

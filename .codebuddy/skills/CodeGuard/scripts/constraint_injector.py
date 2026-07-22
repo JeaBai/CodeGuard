@@ -64,23 +64,18 @@ def detect_project_structure(root_path):
     
     # 兜底：通过源码文件存在性推断语言（无构建文件的项目）
     if not structure["languages"]:
-        # Python: 任何 .py 文件
+        # 使用独立 if 以支持多语言项目
         if list(root.glob("**/*.py")):
             structure["languages"].append("Python")
-        # JavaScript: 任何 .js 文件
-        elif list(root.glob("**/*.js")):
+        if list(root.glob("**/*.js")):
             structure["languages"].append("JavaScript")
-        # TypeScript: 任何 .ts 文件
-        elif list(root.glob("**/*.ts")):
+        if list(root.glob("**/*.ts")):
             structure["languages"].append("TypeScript")
-        # Java: 任何 .java 文件
-        elif list(root.glob("**/*.java")):
+        if list(root.glob("**/*.java")):
             structure["languages"].append("Java")
-        # Go: 任何 .go 文件
-        elif list(root.glob("**/*.go")):
+        if list(root.glob("**/*.go")):
             structure["languages"].append("Go")
-        # Rust: 任何 .rs 文件
-        elif list(root.glob("**/*.rs")):
+        if list(root.glob("**/*.rs")):
             structure["languages"].append("Rust")
     
     # 检测顶级目录

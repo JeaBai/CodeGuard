@@ -111,6 +111,8 @@ CodeGuard v2.0 实现了完整的 MCP (Model Context Protocol) 服务器，遵�
 
 ## 多 Agent 协作架构
 
+> **⚠️ 设计规范：** 此章节为多 Agent 协作的架构设计规范。当前版本无独立代码实现——Agent 间协作由 CodeBuddy Team Mode 平台层提供（参见 `send_message` / `team_create` 工具）。消息协议格式用于指导 Agent 间通信，非独立可执行功能。
+
 本 Skill 支持在 Team Mode 下拆分职责到多个 Agent 并行执行，解决单 Agent 模式下"生成与审查角色冲突"的问题。
 
 ### Agent 角色定义
