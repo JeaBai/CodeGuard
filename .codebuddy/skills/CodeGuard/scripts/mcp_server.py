@@ -205,9 +205,6 @@ def handle_review_file(params):
     # 单文件检测
     collector = quality_check.IssueCollector()
     
-    if not quality_check.source_files:
-        quality_check.find_source_files = lambda p: []
-    
     # 手动派发单文件检测
     ext = os.path.splitext(file_path)[1].lower()
     if ext == ".py":
@@ -408,72 +405,65 @@ def _classify_file(file_path):
 # 主循环 — MCP stdio 传输
 # ============================================================
 
+# ============================================================
+# 方法-处理器映射表（消除 if/elif 链，CC=4）
+# ============================================================
+
+_METHOD_HANDLERS = {
+    "initialize": lambda req_id, params: create_response(req_id, {
+        "protocolVersion": PROTOCOL_VERSION,
+        "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+        "capabilities": {"tools": {}, "resources": {}}
+    }),
+    "tools/list": lambda req_id, params: create_response(req_id, {"tools": TOOLS}),
+    "resources/list": lambda req_id, params: create_response(req_id, {"resources": RESOURCES}),
+}
+
+_TOOL_HANDLERS = {
+    "review_file": handle_review_file,
+    "review_diff": handle_review_diff,
+    "execute_rules": handle_execute_rules,
+    "inject_constraints": handle_inject_constraints,
+}
+
+
 def handle_request(request):
-    """分发 JSON-RPC 请求到对应处理器"""
+    """分发 JSON-RPC 请求到对应处理器（v2.0.1: dispatch table 消除长 if/elif 链）"""
     method = request.get("method", "")
     req_id = request.get("id")
     params = request.get("params", {})
-    
-    # 初始化
-    if method == "initialize":
-        return create_response(req_id, {
-            "protocolVersion": PROTOCOL_VERSION,
-            "serverInfo": {
-                "name": SERVER_NAME,
-                "version": SERVER_VERSION
-            },
-            "capabilities": {
-                "tools": {},
-                "resources": {}
-            }
-        })
-    
-    # 列出工具
-    elif method == "tools/list":
-        return create_response(req_id, {"tools": TOOLS})
-    
-    # 调用工具
-    elif method == "tools/call":
+
+    # 初始化 / 工具列表 / 资源列表（dispatch table）
+    if method in _METHOD_HANDLERS:
+        return _METHOD_HANDLERS[method](req_id, params)
+
+    # 工具调用
+    if method == "tools/call":
         tool_name = params.get("name", "")
-        tool_args = params.get("arguments", {})
-        
-        try:
-            if tool_name == "review_file":
-                result = handle_review_file(tool_args)
-            elif tool_name == "review_diff":
-                result = handle_review_diff(tool_args)
-            elif tool_name == "execute_rules":
-                result = handle_execute_rules(tool_args)
-            elif tool_name == "inject_constraints":
-                result = handle_inject_constraints(tool_args)
-            else:
-                return create_error(req_id, -32601, f"Unknown tool: {tool_name}")
-            
-            return create_response(req_id, {
-                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, indent=2)}]
-            })
-        
-        except Exception as e:
-            return create_error(req_id, -32603, f"Tool execution error: {e}",
-                               {"traceback": traceback.format_exc()})
-    
-    # 列出资源
-    elif method == "resources/list":
-        return create_response(req_id, {"resources": RESOURCES})
-    
-    # 读取资源
-    elif method == "resources/read":
+        handler = _TOOL_HANDLERS.get(tool_name)
+        if handler:
+            try:
+                result = handler(params.get("arguments", {}))
+                return create_response(req_id, {
+                    "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, indent=2)}]
+                })
+            except Exception as e:
+                return create_error(req_id, -32603, f"Tool execution error: {e}",
+                                   {"traceback": traceback.format_exc()})
+        return create_error(req_id, -32601, f"Unknown tool: {tool_name}")
+
+    # 资源读取
+    if method == "resources/read":
         uri = params.get("uri", "")
         result = handle_resource_read(uri)
         return create_response(req_id, result)
-    
+
     # 通知处理
-    elif method == "notifications/initialized":
-        return None  # 通知不需要响应
-    
+    if method == "notifications/initialized":
+        return None
+
     # 未知方法
-    else:
-        return create_error(req_id, -32601, f"Method not found: {method}")
+    return create_error(req_id, -32601, f"Method not found: {method}")
 
 
 def main():

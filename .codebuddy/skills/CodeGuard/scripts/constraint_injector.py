@@ -154,12 +154,12 @@ def load_custom_rules(root_path):
                         data = json.load(f)
                     if "rules" in data:
                         rules["rules"] = data["rules"]
-            except json.JSONDecodeError:
-                pass  # 格式错误的规则文件，静默跳过
+            except json.JSONDecodeError as e:
+                sys.stderr.write(f"[CodeGuard] 自定义规则 JSON 解析失败: {config_path} - {e}\n")
             except FileNotFoundError:
                 pass  # 文件在检查后被删除
-            except Exception:
-                pass  # 其他不可预见的错误，不阻塞主流程
+            except Exception as e:
+                sys.stderr.write(f"[CodeGuard] 加载自定义规则异常: {config_path} - {e}\n")
     
     return rules
 
