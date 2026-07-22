@@ -70,6 +70,18 @@ SECURITY_RED_FLAGS = [
 # 工具函数
 # ============================================================
 
+def _log(msg):
+    """统一日志输出到 stderr（v2.0.3: 替代散落的 print(..., file=sys.stderr)）
+    
+    所有诊断/进度日志经由本函数写入 stderr，确保：
+    - MCP 模式下不污染 JSON-RPC stdio 通道
+    - CLI 终端下进度消息仍可见
+    - 统一前缀便于日志过滤
+    """
+    sys.stderr.write(f"{msg}\n")
+    sys.stderr.flush()
+
+
 def find_source_files(root_path, extensions=None):
     """递归查找源码文件"""
     if extensions is None:
@@ -1342,9 +1354,9 @@ def load_custom_quality_rules(root_path):
     except FileNotFoundError:
         pass
     except json.JSONDecodeError as e:
-        sys.stderr.write(f"[CodeGuard] 自定义规则 JSON 解析失败: {config_path} - {e}\n")
+        _log(f"[CodeGuard] 自定义规则 JSON 解析失败: {config_path} - {e}")
     except Exception as e:
-        sys.stderr.write(f"[CodeGuard] 加载自定义规则异常: {config_path} - {e}\n")
+        _log(f"[CodeGuard] 加载自定义规则异常: {config_path} - {e}")
     
     return custom_rules
 
@@ -1470,16 +1482,16 @@ def run_quality_check(root_path, mode="personal"):
     is_diff = mode == "diff"
     check_mode = "team" if mode == "team" else "personal"
     
-    print(f"[CodeGuard] 开始代码质量检测...", file=sys.stderr)
-    print(f"[CodeGuard] 模式: {mode}", file=sys.stderr)
-    print(f"[CodeGuard] 路径: {root_path}", file=sys.stderr)
+    _log(f"[CodeGuard] 开始代码质量检测...")
+    _log(f"[CodeGuard] 模式: {mode}")
+    _log(f"[CodeGuard] 路径: {root_path}")
     
     if is_diff:
         source_files = get_changed_files(root_path)
-        print(f"[CodeGuard] 增量检测：{len(source_files)} 个变更文件", file=sys.stderr)
+        _log(f"[CodeGuard] 增量检测：{len(source_files)} 个变更文件")
     else:
         source_files = find_source_files(root_path)
-        print(f"[CodeGuard] 全量检测：{len(source_files)} 个源码文件", file=sys.stderr)
+        _log(f"[CodeGuard] 全量检测：{len(source_files)} 个源码文件")
     
     if not source_files:
         collector.add("info", "no_files", root_path, 0, "未发现源码文件")
@@ -1488,7 +1500,7 @@ def run_quality_check(root_path, mode="personal"):
     # 加载自定义规则
     custom_rules = load_custom_quality_rules(root_path)
     if custom_rules:
-        print(f"[CodeGuard] 加载 {len(custom_rules)} 条自定义规则", file=sys.stderr)
+        _log(f"[CodeGuard] 加载 {len(custom_rules)} 条自定义规则")
     
     # 1. 逐文件检测（多语言派发）
     for filepath in source_files:
@@ -1516,7 +1528,7 @@ def run_quality_check(root_path, mode="personal"):
     # 3. 自定义规则检测（所有模式均执行）
     check_custom_rules(source_files, custom_rules, collector)
     
-    print(f"\n[CodeGuard] 检测完成: {collector.summary()}", file=sys.stderr)
+    _log(f"\n[CodeGuard] 检测完成: {collector.summary()}")
     return collector
 
 
@@ -1576,7 +1588,7 @@ def main():
     
     root_path = os.path.abspath(args.path)
     if not os.path.isdir(root_path):
-        print(f"错误: 路径不存在: {root_path}", file=sys.stderr)
+        _log(f"错误: 路径不存在: {root_path}")
         sys.exit(1)
     
     collector = run_quality_check(root_path, args.mode)
