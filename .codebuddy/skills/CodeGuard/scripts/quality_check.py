@@ -165,6 +165,7 @@ class IssueCollector:
             "class_size_regex": 75,
             "file_size": 95,
             "security": 85,        # 剥离后正则
+            "security_multiline": 75,  # v2.0.3: 多行DOTALL标量
             "security_raw": 70,    # 原始正则（含注释噪音）
             "duplication": 85,
             "architecture": 90,    # 依赖图分析
@@ -440,11 +441,12 @@ def _check_class(node, filepath, collector, file_type="source"):
 
 
 def _check_security(content, filepath, collector):
-    """安全检查 — 双扫描模式（v2.0: 消除注释/字符串误报）
+    """安全检查 — 三扫描模式（v2.0.3: 新增多行 DOTALL 扫描阶段）
     
-    第一遍：原始内容扫描 → 置信度 70 (security_raw) 
-    第二遍：剥离注释和字符串后扫描 → 置信度 85 (security)
-    两遍结果合并去重，只有剥离后仍匹配的才报 block。
+    第一遍：原始内容逐行扫描 → 置信度 70 (security_raw) 
+    第二遍：剥离注释和字符串后逐行扫描 → 置信度 85 (security)
+    第三遍：剥离后全文 DOTALL 多行扫描 → 置信度 75 (security_multiline)
+    三遍结果合并去重，只有剥离后仍匹配的才报 block。
     """
     ext = os.path.splitext(filepath)[1].lower()
     file_type = FileClassifier.classify(filepath)
@@ -485,7 +487,22 @@ def _check_security(content, filepath, collector):
                                   "使用环境变量/密钥管理服务存储凭证，使用参数化查询",
                                   confidence=85)
     
-    # 第三层：对仅在原始扫描中发现但剥离后未发现的问题，作为低置信度警告
+    # 第三遍：多行 DOTALL 扫描（v2.0.3: 捕获跨行密码/SQL拼接/隐式行连接）
+    # 将换行替换为空格（保持字符位置1:1映射），使跨行表达式变为单行
+    normalized = stripped.replace('\n', ' ')
+    for idx, (pattern, description) in enumerate(SECURITY_RED_FLAGS):
+        for match in re.finditer(pattern, normalized, re.IGNORECASE):
+            # match.start() 在 normalized 中的位置 == stripped 中的位置（1:1替换）
+            line_no = stripped[:match.start()].count('\n') + 1
+            key = (line_no, idx)
+            if key not in confirmed:
+                confirmed.add(key)
+                collector.add("warn", "security_multiline", filepath, line_no,
+                              f"安全问题(多行检测): {description}",
+                              "使用环境变量/密钥管理服务存储凭证，使用参数化查询",
+                              confidence=75)
+    
+    # 对仅在原始扫描中发现但剥离后未发现的问题，作为低置信度警告
     for line_no, idx, matched, desc in raw_matches:
         key = (line_no, idx)
         if key not in confirmed:
@@ -678,19 +695,33 @@ class DependencyGraph:
         return cycles
     
     def _find_matching_files(self, module_or_path):
-        """根据模块名推测对应的文件路径"""
+        """根据模块名精确匹配文件路径（v2.0.3: 路径段边界匹配，消除子串误报）
+        
+        例如 module="os" → 匹配 .../os.py 或 .../os/... 
+        但不匹配 .../composer.py、.../close_handler.py
+        """
         results = []
         module_lower = module_or_path.lower().replace(".", "/")
+        module_parts = [p for p in module_lower.split("/") if p]
+        
+        if not module_parts:
+            return results
         
         for filepath in self.edges:
             filepath_lower = filepath.lower().replace("\\", "/")
-            # 检查文件路径是否包含模块路径
-            if module_lower in filepath_lower:
+            filepath_parts = [p for p in filepath_lower.split("/") if p]
+            
+            # 尾部文件名匹配（不含扩展名，如 os.py → os == os）
+            basename = os.path.basename(filepath_lower)
+            basename_no_ext = os.path.splitext(basename)[0].lower()
+            if basename_no_ext == module_parts[-1]:
                 results.append(filepath)
-            # 检查模块路径的某部分是否在文件路径中
-            parts = module_lower.split("/")
-            if len(parts) >= 2 and parts[-1] in os.path.basename(filepath_lower):
-                results.append(filepath)
+                continue
+            
+            # 完整路径段后缀匹配（如 domain/user → .../domain/user/...）
+            if len(module_parts) <= len(filepath_parts):
+                if filepath_parts[-len(module_parts):] == module_parts:
+                    results.append(filepath)
         
         return results[:5]  # 限制返回数
     
@@ -998,11 +1029,16 @@ def _count_java_methods(content):
 
 
 # ============================================================
-# 语言专用检测器
+# 语言专用检测器（v2.0.3: 抽取 _check_regex_based_file 消除 80% 重复）
 # ============================================================
 
-def check_javascript_file(filepath, collector, ext):
-    """JS/TS 专用检测（v2.0: 置信度评分 + 文件类型感知）"""
+def _check_regex_based_file(filepath, collector, ext, *, check_nesting=True, check_methods=False):
+    """通用正则检测驱动器 — 服务于 JS/TS/Java/Go/C# 的共享检测逻辑
+    
+    Args:
+        check_nesting: 是否执行嵌套深度检测（Go 跳过）
+        check_methods: 是否执行类方法数检测（Java/C# 适用）
+    """
     file_type = FileClassifier.classify(filepath)
     if file_type in ("generated", "doc"):
         return
@@ -1013,127 +1049,12 @@ def check_javascript_file(filepath, collector, ext):
     except Exception:
         return
     
+    # 基础检查
     loc = count_lines_of_code(content)
     _check_file_size(loc, filepath, collector)
     _check_security(content, filepath, collector)
     
     # 圈复杂度（剥离后正则，置信度 80）
-    cc = _compute_cc_regex(content, ext)
-    if cc > THRESHOLDS["cyclomatic_complexity_block"]:
-        collector.add("block", "complexity_regex", filepath, 0,
-                      f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
-                      "拆分为多个小函数",
-                      confidence=80)
-    elif cc > THRESHOLDS["cyclomatic_complexity_warn"]:
-        collector.add("warn", "complexity_regex", filepath, 0,
-                      f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_warn']}(警告)",
-                      "考虑拆分为更小的函数",
-                      confidence=80)
-    
-    # 嵌套深度（大括号计数，置信度 80）
-    depth = _compute_nesting_regex(content, ext)
-    if depth > THRESHOLDS["max_nesting_block"]:
-        collector.add("block", "nesting_regex", filepath, 0,
-                      f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_block']}(阻塞)",
-                      "使用 early return 减少嵌套",
-                      confidence=80)
-    elif depth > THRESHOLDS["max_nesting_warn"]:
-        collector.add("warn", "nesting_regex", filepath, 0,
-                      f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_warn']}(警告)",
-                      "考虑使用 early return",
-                      confidence=80)
-    
-    # 参数数量（剥离后正则，置信度 80）
-    params = _count_params_regex(content, ext)
-    for (func_name, line), count in params.items():
-        if count > THRESHOLDS["max_function_params_block"]:
-            collector.add("block", "params_regex", filepath, line,
-                          f"函数 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_block']}(阻塞)",
-                          "封装为参数对象",
-                          confidence=80)
-        elif count > THRESHOLDS["max_function_params_warn"]:
-            collector.add("warn", "params_regex", filepath, line,
-                          f"函数 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_warn']}(警告)",
-                          "考虑使用参数对象",
-                          confidence=80)
-    
-    _check_empty_except_generic(content, filepath, collector, ext)
-
-
-def check_java_file(filepath, collector):
-    """Java 专用检测（v2.0: 置信度评分）"""
-    ext = ".java"
-    file_type = FileClassifier.classify(filepath)
-    if file_type in ("generated", "doc"):
-        return
-    
-    try:
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-    except Exception:
-        return
-    
-    loc = count_lines_of_code(content)
-    _check_file_size(loc, filepath, collector)
-    _check_security(content, filepath, collector)
-    
-    cc = _compute_cc_regex(content, ext)
-    if cc > THRESHOLDS["cyclomatic_complexity_block"]:
-        collector.add("block", "complexity_regex", filepath, 0,
-                      f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
-                      "拆分为多个小方法", confidence=80)
-    elif cc > THRESHOLDS["cyclomatic_complexity_warn"]:
-        collector.add("warn", "complexity_regex", filepath, 0,
-                      f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_warn']}(警告)",
-                      "考虑拆分", confidence=80)
-    
-    depth = _compute_nesting_regex(content, ext)
-    if depth > THRESHOLDS["max_nesting_block"]:
-        collector.add("block", "nesting_regex", filepath, 0,
-                      f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_block']}(阻塞)",
-                      "使用 early return 减少嵌套", confidence=80)
-    elif depth > THRESHOLDS["max_nesting_warn"]:
-        collector.add("warn", "nesting_regex", filepath, 0,
-                      f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_warn']}(警告)",
-                      "考虑使用 early return", confidence=80)
-    
-    params = _count_params_regex(content, ext)
-    for (func_name, line), count in params.items():
-        if count > THRESHOLDS["max_function_params_block"]:
-            collector.add("block", "params_regex", filepath, line,
-                          f"方法 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_block']}(阻塞)",
-                          "封装为参数对象", confidence=80)
-        elif count > THRESHOLDS["max_function_params_warn"]:
-            collector.add("warn", "params_regex", filepath, line,
-                          f"方法 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_warn']}(警告)",
-                          "考虑使用参数对象", confidence=80)
-    
-    method_count = _count_java_methods(content)
-    if method_count > THRESHOLDS["max_class_methods_warn"]:
-        collector.add("warn", "class_size_regex", filepath, 0,
-                      f"类方法数(近似) {method_count} > {THRESHOLDS['max_class_methods_warn']}(警告)",
-                      "检查是否违反单一职责原则", confidence=75)
-    
-    _check_empty_except_generic(content, filepath, collector, ext)
-
-
-def check_go_file(filepath, collector):
-    """Go 专用检测（v2.0: 置信度评分）"""
-    ext = ".go"
-    file_type = FileClassifier.classify(filepath)
-    if file_type in ("generated", "doc"):
-        return
-    
-    try:
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-    except Exception:
-        return
-    
-    loc = count_lines_of_code(content)
-    _check_file_size(loc, filepath, collector)
-    _check_security(content, filepath, collector)
-    
     cc = _compute_cc_regex(content, ext)
     if cc > THRESHOLDS["cyclomatic_complexity_block"]:
         collector.add("block", "complexity_regex", filepath, 0,
@@ -1144,75 +1065,59 @@ def check_go_file(filepath, collector):
                       f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_warn']}(警告)",
                       "考虑拆分", confidence=80)
     
+    # 嵌套深度（大括号计数，置信度 80）
+    if check_nesting:
+        depth = _compute_nesting_regex(content, ext)
+        if depth > THRESHOLDS["max_nesting_block"]:
+            collector.add("block", "nesting_regex", filepath, 0,
+                          f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_block']}(阻塞)",
+                          "使用 early return 减少嵌套", confidence=80)
+        elif depth > THRESHOLDS["max_nesting_warn"]:
+            collector.add("warn", "nesting_regex", filepath, 0,
+                          f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_warn']}(警告)",
+                          "考虑使用 early return", confidence=80)
+    
+    # 参数数量（剥离后正则，置信度 80）
     params = _count_params_regex(content, ext)
     for (func_name, line), count in params.items():
         if count > THRESHOLDS["max_function_params_block"]:
             collector.add("block", "params_regex", filepath, line,
                           f"函数 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_block']}(阻塞)",
-                          "封装为结构体参数", confidence=80)
-        elif count > THRESHOLDS["max_function_params_warn"]:
-            collector.add("warn", "params_regex", filepath, line,
-                          f"函数 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_warn']}(警告)",
-                          "考虑使用参数结构体", confidence=80)
-    
-    _check_empty_except_generic(content, filepath, collector, ext)
-
-
-def check_csharp_file(filepath, collector):
-    """C# 专用检测（v2.0: 置信度评分）"""
-    ext = ".cs"
-    file_type = FileClassifier.classify(filepath)
-    if file_type in ("generated", "doc"):
-        return
-    
-    try:
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-    except Exception:
-        return
-    
-    loc = count_lines_of_code(content)
-    _check_file_size(loc, filepath, collector)
-    _check_security(content, filepath, collector)
-    
-    cc = _compute_cc_regex(content, ext)
-    if cc > THRESHOLDS["cyclomatic_complexity_block"]:
-        collector.add("block", "complexity_regex", filepath, 0,
-                      f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
-                      "拆分为多个小方法", confidence=80)
-    elif cc > THRESHOLDS["cyclomatic_complexity_warn"]:
-        collector.add("warn", "complexity_regex", filepath, 0,
-                      f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_warn']}(警告)",
-                      "考虑拆分", confidence=80)
-    
-    depth = _compute_nesting_regex(content, ext)
-    if depth > THRESHOLDS["max_nesting_block"]:
-        collector.add("block", "nesting_regex", filepath, 0,
-                      f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_block']}(阻塞)",
-                      "使用 early return 减少嵌套", confidence=80)
-    elif depth > THRESHOLDS["max_nesting_warn"]:
-        collector.add("warn", "nesting_regex", filepath, 0,
-                      f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_warn']}(警告)",
-                      "考虑使用 early return", confidence=80)
-    
-    params = _count_params_regex(content, ext)
-    for (func_name, line), count in params.items():
-        if count > THRESHOLDS["max_function_params_block"]:
-            collector.add("block", "params_regex", filepath, line,
-                          f"方法 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_block']}(阻塞)",
                           "封装为参数对象", confidence=80)
         elif count > THRESHOLDS["max_function_params_warn"]:
             collector.add("warn", "params_regex", filepath, line,
-                          f"方法 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_warn']}(警告)",
+                          f"函数 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_warn']}(警告)",
                           "考虑使用参数对象", confidence=80)
     
-    method_count = _count_java_methods(content)
-    if method_count > THRESHOLDS["max_class_methods_warn"]:
-        collector.add("warn", "class_size_regex", filepath, 0,
-                      f"类方法数(近似) {method_count} > {THRESHOLDS['max_class_methods_warn']}(警告)",
-                      "检查是否违反单一职责原则", confidence=75)
+    # 类方法数（Java/C# 适用）
+    if check_methods:
+        method_count = _count_java_methods(content)
+        if method_count > THRESHOLDS["max_class_methods_warn"]:
+            collector.add("warn", "class_size_regex", filepath, 0,
+                          f"类方法数(近似) {method_count} > {THRESHOLDS['max_class_methods_warn']}(警告)",
+                          "检查是否违反单一职责原则", confidence=75)
     
     _check_empty_except_generic(content, filepath, collector, ext)
+
+
+def check_javascript_file(filepath, collector, ext):
+    """JS/TS 专用检测（v2.0.3: 委托 _check_regex_based_file）"""
+    _check_regex_based_file(filepath, collector, ext, check_nesting=True, check_methods=False)
+
+
+def check_java_file(filepath, collector):
+    """Java 专用检测（v2.0.3: 委托 _check_regex_based_file）"""
+    _check_regex_based_file(filepath, collector, ".java", check_nesting=True, check_methods=True)
+
+
+def check_go_file(filepath, collector):
+    """Go 专用检测（v2.0.3: 委托 _check_regex_based_file，跳过嵌套深度）"""
+    _check_regex_based_file(filepath, collector, ".go", check_nesting=False, check_methods=False)
+
+
+def check_csharp_file(filepath, collector):
+    """C# 专用检测（v2.0.3: 委托 _check_regex_based_file）"""
+    _check_regex_based_file(filepath, collector, ".cs", check_nesting=True, check_methods=True)
 
 
 def _check_file_size(loc, filepath, collector):
@@ -1425,18 +1330,21 @@ def get_changed_files(root_path):
 
 
 def load_custom_quality_rules(root_path):
-    """加载 .code-guardian/rules.json 中的自定义质量规则"""
+    """加载 .code-guardian/rules.json 中的自定义质量规则（v2.0.3: 与 constraint_injector 逻辑统一）"""
     custom_rules = []
     config_path = Path(root_path) / ".code-guardian" / "rules.json"
     
-    if config_path.exists():
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if "rules" in data:
-                custom_rules = data["rules"]
-        except Exception:
-            pass
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if "rules" in data:
+            custom_rules = data["rules"]
+    except FileNotFoundError:
+        pass
+    except json.JSONDecodeError as e:
+        sys.stderr.write(f"[CodeGuard] 自定义规则 JSON 解析失败: {config_path} - {e}\n")
+    except Exception as e:
+        sys.stderr.write(f"[CodeGuard] 加载自定义规则异常: {config_path} - {e}\n")
     
     return custom_rules
 
@@ -1562,16 +1470,16 @@ def run_quality_check(root_path, mode="personal"):
     is_diff = mode == "diff"
     check_mode = "team" if mode == "team" else "personal"
     
-    print(f"[CodeGuard] 开始代码质量检测...")
-    print(f"[CodeGuard] 模式: {mode}")
-    print(f"[CodeGuard] 路径: {root_path}")
+    print(f"[CodeGuard] 开始代码质量检测...", file=sys.stderr)
+    print(f"[CodeGuard] 模式: {mode}", file=sys.stderr)
+    print(f"[CodeGuard] 路径: {root_path}", file=sys.stderr)
     
     if is_diff:
         source_files = get_changed_files(root_path)
-        print(f"[CodeGuard] 增量检测：{len(source_files)} 个变更文件")
+        print(f"[CodeGuard] 增量检测：{len(source_files)} 个变更文件", file=sys.stderr)
     else:
         source_files = find_source_files(root_path)
-        print(f"[CodeGuard] 全量检测：{len(source_files)} 个源码文件")
+        print(f"[CodeGuard] 全量检测：{len(source_files)} 个源码文件", file=sys.stderr)
     
     if not source_files:
         collector.add("info", "no_files", root_path, 0, "未发现源码文件")
@@ -1580,7 +1488,7 @@ def run_quality_check(root_path, mode="personal"):
     # 加载自定义规则
     custom_rules = load_custom_quality_rules(root_path)
     if custom_rules:
-        print(f"[CodeGuard] 加载 {len(custom_rules)} 条自定义规则")
+        print(f"[CodeGuard] 加载 {len(custom_rules)} 条自定义规则", file=sys.stderr)
     
     # 1. 逐文件检测（多语言派发）
     for filepath in source_files:
@@ -1608,7 +1516,7 @@ def run_quality_check(root_path, mode="personal"):
     # 3. 自定义规则检测（所有模式均执行）
     check_custom_rules(source_files, custom_rules, collector)
     
-    print(f"\n[CodeGuard] 检测完成: {collector.summary()}")
+    print(f"\n[CodeGuard] 检测完成: {collector.summary()}", file=sys.stderr)
     return collector
 
 

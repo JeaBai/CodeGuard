@@ -131,30 +131,46 @@ def detect_project_structure(root_path):
 # ============================================================
 
 def load_custom_rules(root_path):
-    """加载项目自定义规则"""
+    """加载项目自定义规则（v2.0.3: 移除 TOCTOU exists() 检查，仅支持 JSON）
+    
+    支持的配置文件路径:
+      - .code-guardian/rules.json
+      - .code-guardian/rules.yaml  (⚠️ 不支持，请使用 JSON)
+      - .code-guardian.toml       (⚠️ 不支持，请使用 JSON)
+    """
     rules = {"has_custom": False, "rules": []}
     
     config_paths = [
-        Path(root_path) / ".code-guardian" / "rules.json",
-        Path(root_path) / ".code-guardian" / "rules.yaml",
-        Path(root_path) / ".code-guardian.toml",
+        (Path(root_path) / ".code-guardian" / "rules.json", "json"),
+        (Path(root_path) / ".code-guardian" / "rules.yaml", "yaml"),
+        (Path(root_path) / ".code-guardian.toml", "toml"),
     ]
     
-    for config_path in config_paths:
-        if config_path.exists():
-            rules["has_custom"] = True
-            try:
-                if config_path.suffix == ".json":
+    for config_path, fmt in config_paths:
+        try:
+            if fmt == "json":
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if "rules" in data:
+                    rules["has_custom"] = True
+                    rules["rules"] = data["rules"]
+            elif fmt in ("yaml", "toml"):
+                # YAML/TOML 不支持解析，但检查文件是否存在以给出提示
+                try:
                     with open(config_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    if "rules" in data:
-                        rules["rules"] = data["rules"]
-            except json.JSONDecodeError as e:
-                sys.stderr.write(f"[CodeGuard] 自定义规则 JSON 解析失败: {config_path} - {e}\n")
-            except FileNotFoundError:
-                pass  # 文件在检查后被删除
-            except Exception as e:
-                sys.stderr.write(f"[CodeGuard] 加载自定义规则异常: {config_path} - {e}\n")
+                        _ = f.read(1)  # 仅检查可读性，不实际解析
+                    sys.stderr.write(
+                        f"[CodeGuard] ⚠️ 发现 {config_path.name} 但仅支持 JSON。"
+                        f"请转换为 {config_path.with_suffix('.json')} 格式。\n"
+                    )
+                except FileNotFoundError:
+                    pass
+        except FileNotFoundError:
+            pass  # 文件不存在，正常跳过（消除 TOCTOU 预检查）
+        except json.JSONDecodeError as e:
+            sys.stderr.write(f"[CodeGuard] 自定义规则 JSON 解析失败: {config_path} - {e}\n")
+        except Exception as e:
+            sys.stderr.write(f"[CodeGuard] 加载自定义规则异常: {config_path} - {e}\n")
     
     return rules
 

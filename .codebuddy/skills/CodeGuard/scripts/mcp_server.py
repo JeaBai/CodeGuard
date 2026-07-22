@@ -227,7 +227,7 @@ def handle_review_file(params):
         return create_error(None, -32602, f"Access denied: file_path is outside project root")
     
     # 文件类型感知：先分类，按类型决定检测策略（v2.0.2: 修复 file_type 未传递）
-    file_type = _classify_file(file_path)
+    file_type = quality_check.FileClassifier.classify(file_path)
     
     # 生成代码/文档：直接跳过，返回空结果
     if file_type in ("generated", "doc"):
@@ -394,45 +394,6 @@ def handle_resource_read(uri):
         }, ensure_ascii=False)}]}
     
     return create_error(None, -32602, f"Unknown resource: {uri}")
-
-
-# ============================================================
-# 文件类型分类
-# ============================================================
-
-def _classify_file(file_path):
-    """识别文件类型：source / test / config / generated / migration / doc"""
-    path_lower = file_path.lower()
-    name = os.path.basename(path_lower)
-    
-    # 测试文件
-    if any(p in path_lower for p in ["/test/", "/tests/", "/spec/", "/__tests__/"]):
-        return "test"
-    if name.startswith("test_") or name.endswith("_test.py") or name.endswith(".test.js") or name.endswith(".spec.js"):
-        return "test"
-    
-    # 配置文件
-    if any(name.endswith(ext) for ext in [".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf"]):
-        if not any(p in path_lower for p in ["/src/", "/lib/"]):
-            return "config"
-    
-    # 生成代码
-    if any(kw in name for kw in ["generated", "_pb2", "_grpc", ".pb.", "auto_generated"]):
-        return "generated"
-    if any(kw in path_lower for kw in ["/generated/", "/gen/", "/out/", "/dist/", "/build/"]):
-        return "generated"
-    
-    # 数据库迁移
-    if "migration" in path_lower or "migrate" in path_lower or path_lower.endswith(".sql"):
-        return "migration"
-    
-    # 文档
-    if any(p in path_lower for p in ["/docs/", "/doc/", "/documentation/"]):
-        return "doc"
-    if name.endswith(".md"):
-        return "doc"
-    
-    return "source"
 
 
 # ============================================================
