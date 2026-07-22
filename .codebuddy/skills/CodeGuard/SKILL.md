@@ -1,7 +1,7 @@
 ---
 name: CodeGuard
 description: >
-  防止 AI 生成代码沦为"死山代码"的质量守护 Skill / MCP Server (v2.0)。
+  防止 AI 生成代码沦为"死山代码"的质量守护 Skill / MCP Server (v2.0.5)。
   在 AI 生成代码前自动注入架构约束，生成后执行质量门禁检查。
   支持 CodeBuddy Skill 模式 + MCP 协议跨平台模式 (Claude Code/Cursor/VS Code)。
   检测圈复杂度、重复代码、架构分层违规、循环依赖、安全漏洞等问题。
@@ -10,7 +10,7 @@ description: >
   基于验证过的实证研究设计 (GitClear 2025, Sonar 2026, DORA 2024, CodeRabbit 2025, Veracode 2025)。
 ---
 
-# CodeGuard — AI 代码质量守护者 (v2.0)
+# CodeGuard — AI 代码质量守护者 (v2.0.5)
 
 ## 概述
 
@@ -27,7 +27,7 @@ description: >
 
 **解决路径**：建立"生成前约束注入 → 生成中检查提醒 → 生成后脚本验证"三层防线 + 修复指引，从根源遏制死山代码。
 
-## MCP 协议跨平台支持 (v2.0)
+## MCP 协议跨平台支持 (v2.0.5)
 
 CodeGuard v2.0 实现了完整的 MCP (Model Context Protocol) 服务器，遵循 JSON-RPC 2.0 over stdio 规范。
 
@@ -60,7 +60,7 @@ CodeGuard v2.0 实现了完整的 MCP (Model Context Protocol) 服务器，遵�
 | `codeguard://rules/default` | 默认规则集 (JSON) |
 | `codeguard://config/project` | 项目自定义配置 |
 
-## v2.0 新增能力
+## v2.0.5 新增能力
 
 ### 1. 置信度评分
 
@@ -92,12 +92,13 @@ CodeGuard v2.0 实现了完整的 MCP (Model Context Protocol) 服务器，遵�
 - **分层违规**：Domain→Infrastructure (block)、Application→Infrastructure (warn)
 - **循环依赖**：DFS 检测 A→B→C→A 模式 (block, 置信度 95)
 
-### 4. 双扫描安全检测
+### 4. 三扫描安全检测
 
-安全检测分两遍执行：
+安全检测分三遍执行：
 - 第一遍：原始内容快速筛 (置信度 70)
 - 第二遍：剥离注释/字符串后精确匹 (置信度 85)
-- 两层匹配结果合并去重，消除注释/字符串中的误报
+- 第三遍：剥离后全文 DOTALL 双通道多行扫描 — 密码通道(括号+续行符归一化, block/85) + 函数调用通道(仅换行归一化) (v2.0.5)
+- 三遍结果合并去重，消除注释/字符串中的误报
 
 ## 触发条件
 
@@ -345,7 +346,7 @@ python scripts/quality_check.py --path <project_root> --mode diff --format json
 | 增量检测（仅变更文件） | `python scripts/quality_check.py --path . --mode diff` | Reviewer |
 | 文本格式输出 | `python scripts/quality_check.py --path . --format text` | — |
 
-### scripts/mcp_server.py (v2.0)
+### scripts/mcp_server.py (v2.0.5)
 
 MCP 协议服务端，JSON-RPC 2.0 over stdio。
 

@@ -452,16 +452,19 @@ def _check_class(node, filepath, collector, file_type="source"):
                       confidence=85)
 
 
-def _check_security(content, filepath, collector):
+def _check_security(content, filepath, collector, file_type=None):
     """安全检查 — 三扫描模式（v2.0.3: 新增多行 DOTALL 扫描阶段）
     
     第一遍：原始内容逐行扫描 → 置信度 70 (security_raw) 
     第二遍：剥离注释和字符串后逐行扫描 → 置信度 85 (security)
     第三遍：剥离后全文 DOTALL 多行扫描 → 置信度 75 (security_multiline)
     三遍结果合并去重，只有剥离后仍匹配的才报 block。
+    
+    v2.0.4: file_type 可选参数，由调用方传入时跳过冗余 classify。
     """
     ext = os.path.splitext(filepath)[1].lower()
-    file_type = FileClassifier.classify(filepath)
+    if file_type is None:
+        file_type = FileClassifier.classify(filepath)
     
     # 测试文件跳过安全检测
     if file_type == "test":
@@ -499,20 +502,27 @@ def _check_security(content, filepath, collector):
                                   "使用环境变量/密钥管理服务存储凭证，使用参数化查询",
                                   confidence=85)
     
-    # 第三遍：多行 DOTALL 扫描（v2.0.3: 捕获跨行密码/SQL拼接/隐式行连接）
-    # 将换行替换为空格（保持字符位置1:1映射），使跨行表达式变为单行
-    normalized = stripped.replace('\n', ' ')
+    # 第三遍：多行 DOTALL 双通道扫描（v2.0.5: 密码通道+函数调用通道分离）
+    # - 密码通道 (索引0): 归一化 \n、(、)、\ → 捕获 password = (\n "secret"\n) 等
+    # - 函数调用通道 (索引1-8): 仅归一化 \n → 保留 ( 使 eval\(/exec\(等正则正常匹配
+    # 两通道独立匹配、合并去重，严重级别统一为 block(85)
+    PASSWORD_CHANNEL_INDICES = {0}  # 硬编码密钥/密码模式
+    normalized_pwd = stripped.replace('\n', ' ').replace('(', ' ').replace(')', ' ').replace('\\', ' ')
+    normalized_func = stripped.replace('\n', ' ').replace('\\', ' ')  # v2.0.5: 续行符归一化（修复#3）
+            
     for idx, (pattern, description) in enumerate(SECURITY_RED_FLAGS):
+        normalized = normalized_pwd if idx in PASSWORD_CHANNEL_INDICES else normalized_func
         for match in re.finditer(pattern, normalized, re.IGNORECASE):
-            # match.start() 在 normalized 中的位置 == stripped 中的位置（1:1替换）
+            # 位置映射：normalized 由 stripped 经 1:1 单字符替换得来
+            # 注意：此 1:1 映射依赖于所有替换都是单字符→单空格替换的前提
             line_no = stripped[:match.start()].count('\n') + 1
             key = (line_no, idx)
             if key not in confirmed:
                 confirmed.add(key)
-                collector.add("warn", "security_multiline", filepath, line_no,
+                collector.add("block", "security", filepath, line_no,
                               f"安全问题(多行检测): {description}",
                               "使用环境变量/密钥管理服务存储凭证，使用参数化查询",
-                              confidence=75)
+                              confidence=85)
     
     # 对仅在原始扫描中发现但剥离后未发现的问题，作为低置信度警告
     for line_no, idx, matched, desc in raw_matches:
@@ -552,8 +562,8 @@ def _check_empty_except(content, filepath, collector, file_type="source"):
         
         if in_except:
             current_indent = len(line) - len(line.lstrip())
-            # 空行跳过
-            if stripped == "":
+            # 空行和注释行跳过（v2.0.5: 注释行 + docstring 不再中断 except 块检测）
+            if stripped == "" or stripped.startswith('#') or stripped.startswith('"""') or stripped.startswith("'''"):
                 continue
             # 缩进退回（跳出 except 块）
             if current_indent <= except_indent:
@@ -949,9 +959,11 @@ LANG_NESTING_KEYWORDS = {
 }
 
 
-def _compute_cc_regex(content, ext):
-    """用正则近似计算圈复杂度（基础值=1），先在剥离注释和字符串的内容上运行"""
-    stripped = _strip_comments_and_strings(content, ext)
+def _compute_cc_regex(content, ext, *, stripped=None):
+    """用正则近似计算圈复杂度（基础值=1），先在剥离注释和字符串的内容上运行
+    v2.0.4: stripped 可选参数，由调用方预剥离时传入避免重复 strip。"""
+    if stripped is None:
+        stripped = _strip_comments_and_strings(content, ext)
     patterns = LANG_CC_PATTERNS.get(ext, [])
     cc = 1
     for pattern in patterns:
@@ -959,17 +971,20 @@ def _compute_cc_regex(content, ext):
     return cc
 
 
-def _compute_nesting_regex(content, ext):
-    """用大括号计数近似计算最大嵌套深度，先在剥离注释后的内容上运行"""
+def _compute_nesting_regex(content, ext, *, stripped=None):
+    """用大括号计数近似计算最大嵌套深度，先在剥离注释后的内容上运行
+    v2.0.5: stripped 可选参数，由调用方预剥离时传入避免重复 strip。"""
     if ext not in LANG_NESTING_KEYWORDS:
         return 0
     
-    stripped_content = _strip_comments_and_strings(content, ext)
+    if stripped is None:
+        stripped = _strip_comments_and_strings(content, ext)
     nesting_kw = LANG_NESTING_KEYWORDS[ext]
-    lines = stripped_content.split('\n')
+    lines = stripped.split('\n')
     max_depth = 0
     current_depth = 0
-    pending_depth = 0  # v2.0.2: 单语句控制流深度暂存
+    pending_depth = 0      # v2.0.2: 单语句控制流深度暂存
+    pending_releases = []  # v2.0.4: 栈追踪待释放的单语句体深度（修复嵌套永不递减）
     
     for line in lines:
         line_content = line.strip()
@@ -977,27 +992,41 @@ def _compute_nesting_regex(content, ext):
         if not line_content or line_content.startswith('//') or line_content.startswith('#'):
             continue
         
-        # 计算当前行的净深度变化（v2.0.2: 修复变量遮蔽 + 单语句体支持）
+        # 计算当前行的净深度变化
         opens = len(re.findall(r'\{', line_content))
         closes = len(re.findall(r'\}', line_content))
         
-        # 先结算上轮的待定深度（单语句体不会增加 { 但会增加嵌套）
+        # v2.0.4: 先结算上轮的待定深度（单语句体不会增加 { 但会增加嵌套）
         current_depth += pending_depth
         pending_depth = 0
         
-        if re.search(nesting_kw, line_content, re.IGNORECASE):
+        # v2.0.5: 若本行无大括号变化（opens==0 and closes==0）且非关键词→释放一个待定层级
+        # 修复#4: 体行含{}时由大括号逻辑处理，不跳过释放导致双计
+        if pending_releases and not re.search(nesting_kw, line_content, re.IGNORECASE) and opens == 0 and closes == 0:
+            current_depth -= pending_releases.pop()
+        
+        # v2.0.5: findall统计同行关键词数量，修复#5多关键词深度被低估
+        kw_matches = re.findall(nesting_kw, line_content, re.IGNORECASE)
+        kw_count = len(kw_matches)
+        
+        if kw_count > 0:
             if '{' in line_content:
                 # 关键词行有 { → 正常处理大括号
                 current_depth += opens
                 current_depth -= closes
             else:
-                # 单语句控制流（如 if(x) doSomething();）→ 暂定深度+1
-                pending_depth = 1
+                # 单语句控制流 → 暂定深度+N，入栈待体行消费后释放
+                pending_depth = kw_count
+                pending_releases.extend([1] * kw_count)
         else:
             current_depth += opens - closes
-            # 如果本行关闭了所有大括号，待定深度也一并结算
+            # v2.0.5: 先结算所有未释放的待定深度再清空，修复#6 clear导致深度丢失
             if current_depth <= 0:
+                if pending_releases:
+                    current_depth -= sum(pending_releases)
+                current_depth = 0
                 pending_depth = 0
+                pending_releases.clear()
         
         current_depth = max(0, current_depth)
         max_depth = max(max_depth, current_depth)
@@ -1005,9 +1034,11 @@ def _compute_nesting_regex(content, ext):
     return max_depth
 
 
-def _count_params_regex(content, ext):
-    """用正则提取函数参数数量，先在剥离注释和字符串的内容上运行"""
-    stripped = _strip_comments_and_strings(content, ext)
+def _count_params_regex(content, ext, *, stripped=None):
+    """用正则提取函数参数数量，先在剥离注释和字符串的内容上运行
+    v2.0.4: stripped 可选参数，由调用方预剥离时传入避免重复 strip。"""
+    if stripped is None:
+        stripped = _strip_comments_and_strings(content, ext)
     pattern = LANG_PARAM_PATTERNS.get(ext)
     if not pattern:
         return {}
@@ -1030,9 +1061,11 @@ def _count_params_regex(content, ext):
     return results
 
 
-def _count_java_methods(content):
-    """统计 Java/C# 类的方法数，先在剥离注释和字符串的内容上运行"""
-    stripped = _strip_comments_and_strings(content, ".java")
+def _count_java_methods(content, *, stripped=None):
+    """统计 Java/C# 类的方法数，先在剥离注释和字符串的内容上运行
+    v2.0.5: stripped 可选参数，由调用方预剥离时传入避免重复 strip。"""
+    if stripped is None:
+        stripped = _strip_comments_and_strings(content, ".java")
     method_pattern = re.compile(
         r'(?:public|private|protected|static|final|abstract|synchronized)\s+\S+\s+(\w+)\s*\([^)]*\)\s*(\{|throws)',
         re.IGNORECASE
@@ -1064,10 +1097,14 @@ def _check_regex_based_file(filepath, collector, ext, *, check_nesting=True, che
     # 基础检查
     loc = count_lines_of_code(content)
     _check_file_size(loc, filepath, collector)
-    _check_security(content, filepath, collector)
+    _check_security(content, filepath, collector, file_type=file_type)  # v2.0.4: 传入 file_type 避免冗余 classify
+    
+    # v2.0.5: 预剥离注释/字符串共享给 CC/嵌套/参数检测，避免重复 strip
+    # 注意: 即使文件为 test 类型（security 已跳过），CC/嵌套/参数仍需剥离后检测
+    stripped = _strip_comments_and_strings(content, ext)
     
     # 圈复杂度（剥离后正则，置信度 80）
-    cc = _compute_cc_regex(content, ext)
+    cc = _compute_cc_regex(content, ext, stripped=stripped)
     if cc > THRESHOLDS["cyclomatic_complexity_block"]:
         collector.add("block", "complexity_regex", filepath, 0,
                       f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
@@ -1079,7 +1116,7 @@ def _check_regex_based_file(filepath, collector, ext, *, check_nesting=True, che
     
     # 嵌套深度（大括号计数，置信度 80）
     if check_nesting:
-        depth = _compute_nesting_regex(content, ext)
+        depth = _compute_nesting_regex(content, ext, stripped=stripped)  # v2.0.5: 传入预剥离结果
         if depth > THRESHOLDS["max_nesting_block"]:
             collector.add("block", "nesting_regex", filepath, 0,
                           f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_block']}(阻塞)",
@@ -1090,7 +1127,7 @@ def _check_regex_based_file(filepath, collector, ext, *, check_nesting=True, che
                           "考虑使用 early return", confidence=80)
     
     # 参数数量（剥离后正则，置信度 80）
-    params = _count_params_regex(content, ext)
+    params = _count_params_regex(content, ext, stripped=stripped)
     for (func_name, line), count in params.items():
         if count > THRESHOLDS["max_function_params_block"]:
             collector.add("block", "params_regex", filepath, line,
@@ -1103,7 +1140,7 @@ def _check_regex_based_file(filepath, collector, ext, *, check_nesting=True, che
     
     # 类方法数（Java/C# 适用）
     if check_methods:
-        method_count = _count_java_methods(content)
+        method_count = _count_java_methods(content, stripped=stripped)  # v2.0.5: 传入预剥离结果
         if method_count > THRESHOLDS["max_class_methods_warn"]:
             collector.add("warn", "class_size_regex", filepath, 0,
                           f"类方法数(近似) {method_count} > {THRESHOLDS['max_class_methods_warn']}(警告)",
@@ -1157,9 +1194,13 @@ def check_generic_file(filepath, collector, ext):
     _check_file_size(loc, filepath, collector)
     _check_security(content, filepath, collector)
     
+    # v2.0.5: 预剥离注释/字符串共享给 CC 和参数检测，避免重复 strip
+    if ext in LANG_CC_PATTERNS or ext in LANG_PARAM_PATTERNS:
+        stripped = _strip_comments_and_strings(content, ext)
+    
     # CC 和参数数量正则检测（对支持的语言）
     if ext in LANG_CC_PATTERNS:
-        cc = _compute_cc_regex(content, ext)
+        cc = _compute_cc_regex(content, ext, stripped=stripped)
         if cc > THRESHOLDS["cyclomatic_complexity_block"]:
             collector.add("block", "complexity_regex", filepath, 0,
                           f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
@@ -1170,7 +1211,7 @@ def check_generic_file(filepath, collector, ext):
                           "考虑拆分", confidence=80)
     
     if ext in LANG_PARAM_PATTERNS:
-        params = _count_params_regex(content, ext)
+        params = _count_params_regex(content, ext, stripped=stripped)
         for (func_name, line), count in params.items():
             if count > THRESHOLDS["max_function_params_block"]:
                 collector.add("block", "params_regex", filepath, line,
@@ -1233,6 +1274,9 @@ def _check_empty_except_generic(content, filepath, collector, ext):
             in_handler = True
             continue
         if in_handler:
+            # v2.0.5: 空行和注释行跳过，修复#11 注释中断多行异常检测
+            if stripped == "" or stripped.startswith('//') or stripped.startswith('#'):
+                continue
             if stripped in empty_body or re.match(r'print\s*\(', stripped) or \
                (ext == ".go" and any(stripped.startswith(p) for p in _go_err_return)):
                 collector.add("warn", "error_handling", filepath, handler_line,

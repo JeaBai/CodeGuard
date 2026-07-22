@@ -146,6 +146,8 @@ def load_custom_rules(root_path):
         (Path(root_path) / ".code-guardian.toml", "toml"),
     ]
     
+    warned_configs = set()  # v2.0.5: 防止重复stderr警告
+    
     for config_path, fmt in config_paths:
         try:
             if fmt == "json":
@@ -155,14 +157,19 @@ def load_custom_rules(root_path):
                     rules["has_custom"] = True
                     rules["rules"] = data["rules"]
             elif fmt in ("yaml", "toml"):
-                # YAML/TOML 不支持解析，但检查文件是否存在以给出提示
+                # v2.0.5: 读取至少min(80,size)字节 + 文件大小验证，避免1字节脆弱性
+                if str(config_path) in warned_configs:
+                    continue
                 try:
-                    with open(config_path, "r", encoding="utf-8") as f:
-                        _ = f.read(1)  # 仅检查可读性，不实际解析
-                    sys.stderr.write(
-                        f"[CodeGuard] ⚠️ 发现 {config_path.name} 但仅支持 JSON。"
-                        f"请转换为 {config_path.with_suffix('.json')} 格式。\n"
-                    )
+                    file_size = os.path.getsize(config_path)
+                    if file_size > 0:
+                        with open(config_path, "r", encoding="utf-8") as f:
+                            _ = f.read(min(80, file_size))  # 读取有意义的样本
+                        sys.stderr.write(
+                            f"[CodeGuard] ⚠️ 发现 {config_path.name} 但仅支持 JSON。"
+                            f"请转换为 {config_path.with_suffix('.json')} 格式。\n"
+                        )
+                        warned_configs.add(str(config_path))
                 except FileNotFoundError:
                     pass
         except FileNotFoundError:

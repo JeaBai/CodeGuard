@@ -57,7 +57,7 @@ import constraint_injector
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "CodeGuard"
-SERVER_VERSION = "2.0.0"
+SERVER_VERSION = "2.0.5"
 
 # ============================================================
 # JSON-RPC 2.0 消息处理
@@ -284,12 +284,8 @@ def handle_review_diff(params):
     if not os.path.isdir(root_path):
         return create_error(None, -32602, f"Invalid project_root: {root_path}")
     
+    # v2.0.5: run_quality_check 内部已执行 check_custom_rules，移除重复调用（修复#14）
     collector = quality_check.run_quality_check(root_path, mode="diff")
-    custom_rules = quality_check.load_custom_quality_rules(root_path)
-    if custom_rules:
-        quality_check.check_custom_rules(
-            quality_check.get_changed_files(root_path), custom_rules, collector
-        )
     
     return {
         "issues": [
@@ -443,8 +439,7 @@ def handle_request(request):
                     "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, indent=2)}]
                 })
             except Exception as e:
-                sys.stderr.write(f"[CodeGuard MCP] Tool execution error: {e}\n{traceback.format_exc()}\n")
-                sys.stderr.flush()
+                quality_check._log(f"[CodeGuard MCP] Tool execution error: {e}\n{traceback.format_exc()}")
                 return create_error(req_id, -32603, f"Tool execution error: {e}")
         return create_error(req_id, -32601, f"Unknown tool: {tool_name}")
 
@@ -472,9 +467,8 @@ def main():
     os.chdir(root_abs)
     set_project_root(root_abs)
     
-    # 写入 stderr 避免污染 stdio 通道
-    sys.stderr.write(f"[CodeGuard MCP] Starting v{SERVER_VERSION} on {args.project_root}\n")
-    sys.stderr.flush()
+    # v2.0.5: 统一使用 _log 避免污染 stdio 通道
+    quality_check._log(f"[CodeGuard MCP] Starting v{SERVER_VERSION} on {args.project_root}")
     
     # MCP 主循环：从 stdin 逐行读取 JSON-RPC 请求
     try:
@@ -486,8 +480,7 @@ def main():
             try:
                 request = json.loads(line)
             except json.JSONDecodeError:
-                sys.stderr.write(f"[CodeGuard MCP] Invalid JSON: {line[:100]}\n")
-                sys.stderr.flush()
+                quality_check._log(f"[CodeGuard MCP] Invalid JSON: {line[:100]}")
                 continue
             
             response = handle_request(request)
@@ -497,11 +490,10 @@ def main():
                 sys.stdout.flush()
     
     except KeyboardInterrupt:
-        sys.stderr.write("[CodeGuard MCP] Shutting down...\n")
+        quality_check._log("[CodeGuard MCP] Shutting down...")
         sys.exit(0)
     except Exception as e:
-        sys.stderr.write(f"[CodeGuard MCP] Fatal error: {e}\n")
-        sys.stderr.write(traceback.format_exc())
+        quality_check._log(f"[CodeGuard MCP] Fatal error: {e}\n{traceback.format_exc()}")
         sys.exit(1)
 
 
