@@ -177,7 +177,6 @@ class IssueCollector:
             "class_size_regex": 75,
             "file_size": 95,
             "security": 85,        # 剥离后正则
-            "security_multiline": 75,  # v2.0.3: 多行DOTALL标量
             "security_raw": 70,    # 原始正则（含注释噪音）
             "duplication": 85,
             "architecture": 90,    # 依赖图分析
@@ -372,8 +371,8 @@ def check_python_file(filepath, collector):
         elif isinstance(node, ast.ClassDef):
             _check_class(node, filepath, collector, file_type)
     
-    # 安全检查（双扫描模式，v2.0）
-    _check_security(content, filepath, collector)
+    # 安全检查（v2.0.6: 传入 file_type 避免冗余 classify）
+    _check_security(content, filepath, collector, file_type=file_type)
     
     # 空异常处理检测
     _check_empty_except(content, filepath, collector, file_type)
@@ -542,14 +541,16 @@ def _check_empty_except(content, filepath, collector, file_type="source"):
     in_except = False
     except_line = 0
     except_indent = 0
+    in_docstring = False  # v2.0.6: 跟踪多行 docstring 状态，修复#1 中间行中断检测
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
         
         # 同行检测：except SomeError: pass 或 except: pass
         if re.match(r'except\b', stripped):
-            # 检查同行尾部是否为空体
-            rest = re.sub(r'^.*:\s*', '', stripped)
-            if rest in ("pass", "") or stripped.endswith(": pass"):
+            # v2.0.6: 先移除内联注释再检查，修复#9 内联注释绕过
+            code_only = re.sub(r'#.*$', '', stripped).rstrip()
+            rest = re.sub(r'^.*:\s*', '', code_only)
+            if rest in ("pass", "") or code_only.endswith(": pass"):
                 collector.add("warn", "error_handling", filepath, i,
                               "异常处理过于简单（except 行直接 pass）",
                               "添加适当的日志记录和错误处理逻辑",
@@ -558,17 +559,35 @@ def _check_empty_except(content, filepath, collector, file_type="source"):
             in_except = True
             except_line = i
             except_indent = len(line) - len(line.lstrip())
+            in_docstring = False
             continue
         
         if in_except:
             current_indent = len(line) - len(line.lstrip())
-            # 空行和注释行跳过（v2.0.5: 注释行 + docstring 不再中断 except 块检测）
-            if stripped == "" or stripped.startswith('#') or stripped.startswith('"""') or stripped.startswith("'''"):
-                continue
-            # 缩进退回（跳出 except 块）
+            # 缩进退回（跳出 except 块）—— 先于 docstring 检查，确保正常退出
             if current_indent <= except_indent:
                 in_except = False
+                in_docstring = False
                 continue
+            # v2.0.6: docstring 状态机 — 多行 docstring 中间行和结束行不中断检测
+            if in_docstring:
+                if stripped.startswith('"""') or stripped.startswith("'''"):
+                    in_docstring = False  # docstring 结束行
+                continue  # docstring 内部行跳过
+            if stripped == "" or stripped.startswith('#'):
+                continue
+            # docstring 开始行
+            if (stripped.startswith('"""') or stripped.startswith("'''")):
+                if stripped.endswith('"""') or stripped.endswith("'''"):
+                    if len(stripped) <= 6:  # 单行空 docstring
+                        continue
+                # 检查是否单行闭合 ('"""..."""' 或 "''''...'''")
+                quote3 = stripped[:3]
+                if len(stripped) > 3 and stripped.endswith(quote3) and len(stripped) > 6:
+                    continue  # 单行完整 docstring，跳过
+                else:
+                    in_docstring = True  # 多行 docstring 开始
+                    continue
             if stripped in ("pass", "") or re.match(r'print\s*\(', stripped):
                 collector.add("warn", "error_handling", filepath, except_line,
                               "异常处理过于简单（pass 或仅 print）",
@@ -578,13 +597,24 @@ def _check_empty_except(content, filepath, collector, file_type="source"):
 
 
 def check_duplicates(source_files, collector):
-    """检测重复代码块（支持跨文件检测）"""
+    """检测重复代码块（支持跨文件检测）
+    v2.0.6: 比较前剥离注释行，修复#8 注释差异导致重复代码漏检
+    """
     block_map = defaultdict(list)
     
     for filepath in source_files:
         try:
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                lines = [l.strip() for l in f.readlines()]
+                # 剥离注释行后比较：替换 # 行和 // 行为空行保持行号对齐
+                raw_lines = f.readlines()
+                lines = []
+                for l in raw_lines:
+                    stripped_line = l.strip()
+                    # 跳过纯注释行（替换为空行保持行号对齐，不改变行数）
+                    if stripped_line.startswith('#') or stripped_line.startswith('//'):
+                        lines.append('')
+                    else:
+                        lines.append(stripped_line)
         except Exception:
             continue
         
@@ -1005,11 +1035,16 @@ def _compute_nesting_regex(content, ext, *, stripped=None):
         if pending_releases and not re.search(nesting_kw, line_content, re.IGNORECASE) and opens == 0 and closes == 0:
             current_depth -= pending_releases.pop()
         
-        # v2.0.5: findall统计同行关键词数量，修复#5多关键词深度被低估
+        # v2.0.6: findall统计同行关键词数量，修复#5多关键词深度被低估
+        # 同时先释放pending_releases旧条目再append新条目，修复#3连续单语句体累积
         kw_matches = re.findall(nesting_kw, line_content, re.IGNORECASE)
         kw_count = len(kw_matches)
         
         if kw_count > 0:
+            # 先释放所有旧待定条目（本行是一个新的控制流，旧体已结束）
+            if pending_releases:
+                current_depth -= sum(pending_releases)
+                pending_releases.clear()
             if '{' in line_content:
                 # 关键词行有 { → 正常处理大括号
                 current_depth += opens
@@ -1183,6 +1218,7 @@ def _check_file_size(loc, filepath, collector):
 
 def check_generic_file(filepath, collector, ext):
     """对非主流语言执行通用质量检测（v2.0.2: 增加 CC/params 正则检测）"""
+    file_type = FileClassifier.classify(filepath)  # v2.0.6: 提前分类传入 _check_security
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
@@ -1192,7 +1228,7 @@ def check_generic_file(filepath, collector, ext):
     
     loc = count_lines_of_code(content)
     _check_file_size(loc, filepath, collector)
-    _check_security(content, filepath, collector)
+    _check_security(content, filepath, collector, file_type=file_type)  # v2.0.6: 传入 file_type
     
     # v2.0.5: 预剥离注释/字符串共享给 CC 和参数检测，避免重复 strip
     if ext in LANG_CC_PATTERNS or ext in LANG_PARAM_PATTERNS:
