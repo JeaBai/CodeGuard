@@ -1,0 +1,49 @@
+{
+  "rules": [
+    {
+      "id": "TEAM_NO_OS_IMPORT_IN_DOMAIN",
+      "description": "Domain 层不得直接使用 os 模块",
+      "severity": "block",
+      "target": "domain",
+      "pattern": "^import\\s+os|^from\\s+os\\s+import",
+      "message": "Domain 层不应导入 os 模块（应为纯业务逻辑）",
+      "suggestion": "通过 Domain 层接口抽象文件系统操作，由 Infrastructure 层实现"
+    },
+    {
+      "id": "TEAM_NO_PRINT_IN_PRODUCTION",
+      "description": "生产环境禁用 print()",
+      "severity": "block",
+      "target": "all",
+      "pattern": "print\\s*\\(",
+      "message": "禁止使用 print() 输出，必须使用 structured logging",
+      "suggestion": "使用 logging.info() 或 logger.info() 替代 print()"
+    },
+    {
+      "id": "TEAM_API_VERSION_PREFIX",
+      "description": "API 端点必须包含版本前缀",
+      "severity": "warn",
+      "target": "presentation",
+      "pattern": "@(?:Get|Post|Put|Delete|Patch)Mapping\\([\"\\'][^v]",
+      "message": "API 端点缺少版本前缀",
+      "suggestion": "在所有 API 端点路径前添加 /v1/ 前缀"
+    },
+    {
+      "id": "TEAM_NO_DIRECT_DB",
+      "description": "Controller 层不得直接调用数据库操作",
+      "severity": "block",
+      "target": "presentation",
+      "pattern": "(?:DatabaseConnection|db\\.execute|connection\\.query|Session\\(\\)|create_engine)",
+      "message": "Controller 层直接访问数据库",
+      "suggestion": "必须通过 Service 层封装所有数据库操作"
+    },
+    {
+      "id": "TEAM_LOGGING_STANDARD",
+      "description": "所有异常必须使用 structured logging 记录",
+      "severity": "warn",
+      "target": "all",
+      "pattern": "except\\s+\\w+.*:\\s*\\n\\s*(?:pass|print|return\\s+None)",
+      "message": "异常处理缺少日志记录",
+      "suggestion": "使用 logging.exception() 记录异常上下文"
+    }
+  ]
+}

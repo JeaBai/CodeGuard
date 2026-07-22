@@ -1,0 +1,22 @@
+{
+  "rules": [
+    {
+      "id": "CUSTOM_NO_STATIC_SINGLETON",
+      "description": "禁止使用静态可变单例（应使用依赖注入）",
+      "severity": "block",
+      "target": "all",
+      "pattern": "public\\s+static\\s+(?:final\\s+)?\\w+\\s+INSTANCE\\s*=",
+      "message": "静态可变单例模式违反依赖倒置原则",
+      "suggestion": "使用依赖注入框架（Spring/Guice/Dagger）替代静态单例"
+    },
+    {
+      "id": "CUSTOM_NO_MAGIC_NUMBER",
+      "description": "禁止魔法数字（常数值直接硬编码）",
+      "severity": "warn",
+      "target": "all",
+      "pattern": "(?<![\\w\"'.])(?:3[01]|[12]\\d|[1-9])\\s*(?=[+\\-*/><=;,\\)\\]}])",
+      "message": "使用了魔法数字，应提取为命名常量",
+      "suggestion": "提取为类级别的 static final 常量"
+    }
+  ]
+}

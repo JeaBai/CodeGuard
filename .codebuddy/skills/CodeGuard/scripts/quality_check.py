@@ -141,19 +141,56 @@ def get_nesting_depth(node):
 # ============================================================
 
 class IssueCollector:
-    """问题收集器"""
+    """问题收集器（v2.0: 支持置信度评分）
+
+    置信度评分标准（参考 mrzadexinho/codeguard 设计）：
+      - 90-100: 确定 — AST 精确分析
+      - 80-89:  高   — 剥离注释和字符串后的正则匹配
+      - 70-79:  中   — 原始正则匹配
+      - 60-69:  低   — 启发式/统计推断
+      - <60:    不确定 — 仅供参考
+    """
     def __init__(self):
         self.issues = []
         self.stats = defaultdict(int)
+        # 默认置信度矩阵（按检测类别）
+        self.confidence_base = {
+            "complexity": 90,      # AST 精确
+            "complexity_regex": 80, # 剥离后正则近似
+            "nesting": 90,
+            "nesting_regex": 80,
+            "params": 90,
+            "params_regex": 80,
+            "class_size": 85,
+            "class_size_regex": 75,
+            "file_size": 95,
+            "security": 85,        # 剥离后正则
+            "security_raw": 70,    # 原始正则（含注释噪音）
+            "duplication": 85,
+            "architecture": 90,    # 依赖图分析
+            "architecture_cycle": 95,  # 循环依赖高度确定
+            "architecture_regex": 78,
+            "error_handling": 82,
+            "naming": 75,
+            "custom_rule": 85,
+            "parse_error": 95,
+            "custom_rule_config": 95,
+            "no_files": 95,
+        }
     
-    def add(self, severity, category, filepath, line, message, suggestion=""):
+    def add(self, severity, category, filepath, line, message, suggestion="", confidence=None):
+        if confidence is None:
+            # 从矩阵获取默认置信度
+            confidence = self.confidence_base.get(category, 80)
+        
         self.issues.append({
-            "severity": severity,  # "info", "warn", "block"
+            "severity": severity,
             "category": category,
             "file": filepath,
             "line": line,
             "message": message,
-            "suggestion": suggestion
+            "suggestion": suggestion,
+            "confidence": confidence
         })
         self.stats[severity] += 1
     
@@ -164,16 +201,133 @@ class IssueCollector:
         return self.stats.get("warn", 0) > 0
     
     def summary(self):
+        # 计算平均置信度
+        avg_conf = 0
+        if self.issues:
+            avg_conf = sum(i.get("confidence", 80) for i in self.issues) // len(self.issues)
         return {
             "total_issues": len(self.issues),
             "blocks": self.stats.get("block", 0),
             "warnings": self.stats.get("warn", 0),
-            "info": self.stats.get("info", 0)
+            "info": self.stats.get("info", 0),
+            "avg_confidence": avg_conf
         }
 
 
+# ============================================================
+# 文件类型分类器（v2.0: 按文件类型调整规则行为）
+# 参考 mrzadexinho/codeguard 的文件类型感知设计
+# ============================================================
+
+class FileClassifier:
+    """文件类型分类器
+    - source:    业务源代码 → 全量检测
+    - test:      测试文件 → 跳过安全规则，降低复杂度阈值
+    - config:    配置文件 → 跳过圈复杂度，保留安全检测
+    - generated: 自动生成的代码 → 跳过所有检测，仅标记
+    - migration: 数据库迁移 → 跳过复杂度，保留 SQL 注入检测
+    - doc:       文档/标记文件 → 全部跳过
+    """
+    
+    def __init__(self):
+        pass
+    
+    @staticmethod
+    def classify(file_path):
+        """根据文件路径和内容特征分类"""
+        path_lower = file_path.lower()
+        name = os.path.basename(path_lower)
+        ext = os.path.splitext(path_lower)[1].lower()
+        
+        # 文档
+        if ext == ".md" or "documentation" in path_lower:
+            return "doc"
+        
+        # 测试文件（路径或命名）
+        if any(p in path_lower for p in ["/test/", "/tests/", "/spec/", "/__tests__/",
+                                          "/testing/", "/fixtures/", "/mocks/", "/stubs/"]):
+            return "test"
+        if name.startswith("test_") or name.endswith("_test.py") or \
+           name.endswith(".test.js") or name.endswith(".spec.js") or \
+           name.endswith(".test.ts") or name.endswith(".spec.ts") or \
+           name.endswith("Test.java") or name.endswith("Tests.java") or \
+           name.endswith("_test.go") or name.endswith("_test.rs"):
+            return "test"
+        
+        # 生成代码
+        if any(kw in name for kw in ["generated", "_pb2", "_grpc", ".pb.", "auto_generated", "_generated"]):
+            return "generated"
+        if any(kw in path_lower for kw in ["/generated/", "/gen/", "/out/", "/dist/", "/build/",
+                                            "/node_modules/", "/vendor/", "/third_party/"]):
+            return "generated"
+        
+        # 配置文件
+        if ext in (".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env", ".xml"):
+            if "package.json" in name or "tsconfig" in name or "docker" in name:
+                return "config"
+        
+        # 数据库迁移
+        if any(kw in path_lower for kw in ["/migration/", "/migrations/", "/migrate/", "/schema/"]):
+            return "migration"
+        if ext == ".sql":
+            return "migration"
+        
+        return "source"
+    
+    @staticmethod
+    def get_rule_adjustments(file_type):
+        """返回规则调整建议
+        返回 dict: {"skip_categories": [...], "lower_thresholds": {...}, "note": "..."}
+        """
+        if file_type == "test":
+            return {
+                "skip_categories": ["security"],  # 测试文件跳过安全检测
+                "lower_thresholds": {"complexity": -3, "params": -2},  # 测试函数允许更高复杂度
+                "file_label": "[TEST]"
+            }
+        elif file_type == "config":
+            return {
+                "skip_categories": ["complexity", "nesting", "params", "class_size", "duplication"],
+                "note": "配置文件仅执行安全检测",
+                "file_label": "[CONFIG]"
+            }
+        elif file_type == "generated":
+            return {
+                "skip_categories": ["complexity", "nesting", "params", "class_size", "duplication",
+                                    "architecture", "naming", "error_handling", "security"],
+                "note": "生成代码不执行检测，仅标记为不可维护",
+                "file_label": "[GENERATED]"
+            }
+        elif file_type == "migration":
+            return {
+                "skip_categories": ["complexity", "nesting", "params", "class_size", "naming"],
+                "note": "迁移脚本仅执行 SQL 注入检测",
+                "file_label": "[MIGRATION]"
+            }
+        elif file_type == "doc":
+            return {
+                "skip_categories": ["*"],
+                "note": "文档文件不执行检测",
+                "file_label": "[DOC]"
+            }
+        else:  # source
+            return {
+                "skip_categories": [],
+                "file_label": "[SOURCE]"
+            }
+
+
+def _should_skip_category(file_type, category):
+    """根据文件类型判断是否应跳过某类检测"""
+    adjustments = FileClassifier.get_rule_adjustments(file_type)
+    skipped = adjustments.get("skip_categories", [])
+    return category in skipped or "*" in skipped
+
+
 def check_python_file(filepath, collector):
-    """对单个 Python 文件执行质量检测"""
+    """对单个 Python 文件执行质量检测（v2.0: 文件类型感知 + 置信度评分）"""
+    file_type = FileClassifier.classify(filepath)
+    
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
@@ -181,15 +335,16 @@ def check_python_file(filepath, collector):
         collector.add("info", "parse_error", filepath, 0, f"无法读取文件: {e}")
         return
     
+    # 生成代码/文档：仅标记，跳过检测
+    if file_type in ("generated", "doc"):
+        if file_type == "generated":
+            collector.add("info", "file_type", filepath, 0,
+                         "[GENERATED] 自动生成文件，跳过质量检测",
+                         "如需检测生成代码，请在 FileClassifier 中移除该路径")
+        return
+    
     loc = count_lines_of_code(content)
-    if loc > THRESHOLDS["max_file_lines_block"]:
-        collector.add("block", "file_size", filepath, 0,
-                      f"文件代码行数 {loc} > {THRESHOLDS['max_file_lines_block']}（阻塞阈值）",
-                      "将文件拆分为多个模块")
-    elif loc > THRESHOLDS["max_file_lines_warn"]:
-        collector.add("warn", "file_size", filepath, 0,
-                      f"文件代码行数 {loc} > {THRESHOLDS['max_file_lines_warn']}（警告阈值）",
-                      "考虑拆分大文件")
+    _check_file_size(loc, filepath, collector)
     
     try:
         tree = ast.parse(content)
@@ -200,60 +355,66 @@ def check_python_file(filepath, collector):
     # 遍历所有函数
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            _check_function(node, filepath, collector)
+            _check_function(node, filepath, collector, file_type)
         elif isinstance(node, ast.ClassDef):
-            _check_class(node, filepath, collector)
+            _check_class(node, filepath, collector, file_type)
     
-    # 安全检查
+    # 安全检查（双扫描模式，v2.0）
     _check_security(content, filepath, collector)
     
     # 空异常处理检测
-    _check_empty_except(content, filepath, collector)
+    _check_empty_except(content, filepath, collector, file_type)
 
 
-def _check_function(node, filepath, collector):
-    """检测函数质量"""
+def _check_function(node, filepath, collector, file_type="source"):
+    """检测函数质量（v2.0: 置信度评分）"""
     func_name = node.name
     
-    # 圈复杂度
+    # 圈复杂度（AST 精确，置信度 90）
     cc = compute_cyclomatic_complexity(node)
     if cc > THRESHOLDS["cyclomatic_complexity_block"]:
         collector.add("block", "complexity", filepath, node.lineno,
                       f"函数 '{func_name}' 圈复杂度 {cc} > {THRESHOLDS['cyclomatic_complexity_block']}（阻塞）",
-                      "拆分为多个小函数，或使用策略模式")
+                      "拆分为多个小函数，或使用策略模式",
+                      confidence=90)
     elif cc > THRESHOLDS["cyclomatic_complexity_warn"]:
         collector.add("warn", "complexity", filepath, node.lineno,
                       f"函数 '{func_name}' 圈复杂度 {cc} > {THRESHOLDS['cyclomatic_complexity_warn']}（警告）",
-                      "考虑拆分为更小的函数")
+                      "考虑拆分为更小的函数",
+                      confidence=90)
     
-    # 参数数量
+    # 参数数量（AST 精确，置信度 92）
     num_params = len(node.args.args)
     if num_params > THRESHOLDS["max_function_params_block"]:
         collector.add("block", "params", filepath, node.lineno,
                       f"函数 '{func_name}' 参数数量 {num_params} > {THRESHOLDS['max_function_params_block']}（阻塞）",
-                      "封装为参数对象或数据类")
+                      "封装为参数对象或数据类",
+                      confidence=92)
     elif num_params > THRESHOLDS["max_function_params_warn"]:
         collector.add("warn", "params", filepath, node.lineno,
                       f"函数 '{func_name}' 参数数量 {num_params} > {THRESHOLDS['max_function_params_warn']}（警告）",
-                      "考虑使用参数对象")
+                      "考虑使用参数对象",
+                      confidence=92)
     
-    # 嵌套深度
+    # 嵌套深度（AST 精确，置信度 90）
     depth = get_nesting_depth(node)
     if depth > THRESHOLDS["max_nesting_block"]:
         collector.add("block", "nesting", filepath, node.lineno,
                       f"函数 '{func_name}' 嵌套深度 {depth} > {THRESHOLDS['max_nesting_block']}（阻塞）",
-                      "使用 early return 或提取嵌套逻辑为独立函数")
+                      "使用 early return 或提取嵌套逻辑为独立函数",
+                      confidence=90)
     elif depth > THRESHOLDS["max_nesting_warn"]:
         collector.add("warn", "nesting", filepath, node.lineno,
                       f"函数 '{func_name}' 嵌套深度 {depth} > {THRESHOLDS['max_nesting_warn']}（警告）",
-                      "考虑使用 early return 减少嵌套")
+                      "考虑使用 early return 减少嵌套",
+                      confidence=90)
 
 
-def _check_class(node, filepath, collector):
-    """检测类质量"""
+def _check_class(node, filepath, collector, file_type="source"):
+    """检测类质量（v2.0: 置信度评分）"""
     class_name = node.name
     
-    # 方法数量
+    # 方法数量（AST 精确，置信度 85）
     methods = [n for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
                and not n.name.startswith("__")]
     num_methods = len(methods)
@@ -261,33 +422,82 @@ def _check_class(node, filepath, collector):
     if num_methods > THRESHOLDS["max_class_methods_warn"]:
         collector.add("warn", "class_size", filepath, node.lineno,
                       f"类 '{class_name}' 方法数 {num_methods} > {THRESHOLDS['max_class_methods_warn']}（警告）",
-                      "检查是否违反单一职责原则，考虑拆分")
+                      "检查是否违反单一职责原则，考虑拆分",
+                      confidence=85)
     
-    # 类代码行数
+    # 类代码行数（AST 精确，置信度 88）
     class_lines = node.end_lineno - node.lineno + 1 if node.end_lineno else 0
     if class_lines > THRESHOLDS["max_class_lines_block"]:
         collector.add("block", "class_size", filepath, node.lineno,
                       f"类 '{class_name}' 代码行数 {class_lines} > {THRESHOLDS['max_class_lines_block']}（阻塞）",
-                      "拆分为多个职责单一的类")
+                      "拆分为多个职责单一的类",
+                      confidence=88)
     elif class_lines > THRESHOLDS["max_class_lines_warn"]:
         collector.add("warn", "class_size", filepath, node.lineno,
                       f"类 '{class_name}' 代码行数 {class_lines} > {THRESHOLDS['max_class_lines_warn']}（警告）",
-                      "检查是否违反单一职责原则")
+                      "检查是否违反单一职责原则",
+                      confidence=88)
 
 
 def _check_security(content, filepath, collector):
-    """安全检查（基于 Veracode 2025: 45% AI代码未通过安全测试）"""
+    """安全检查 — 双扫描模式（v2.0: 消除注释/字符串误报）
+    
+    第一遍：原始内容扫描 → 置信度 70 (security_raw) 
+    第二遍：剥离注释和字符串后扫描 → 置信度 85 (security)
+    两遍结果合并去重，只有剥离后仍匹配的才报 block。
+    """
+    ext = os.path.splitext(filepath)[1].lower()
+    file_type = FileClassifier.classify(filepath)
+    
+    # 测试文件跳过安全检测
+    if file_type == "test":
+        return
+    
+    # 第一遍：原始扫描（快速筛查，置信度低）
     lines = content.split("\n")
+    raw_matches = []  # (line_no, pattern_index, matched_text)
+    
     for i, line in enumerate(lines, 1):
-        for pattern, description in SECURITY_RED_FLAGS:
-            if re.search(pattern, line, re.IGNORECASE):
-                collector.add("block", "security", filepath, i,
-                              f"安全问题: {description}",
-                              "使用环境变量/密钥管理服务存储凭证，使用参数化查询")
+        for idx, (pattern, description) in enumerate(SECURITY_RED_FLAGS):
+            match = re.search(pattern, line, re.IGNORECASE)
+            if match:
+                raw_matches.append((i, idx, match.group(), description))
+    
+    # 第二遍：剥离后扫描（高精度，去注释/字符串噪音）
+    stripped = _strip_comments_and_strings(content, ext) if ext in (
+        ".py", ".js", ".ts", ".mjs", ".java", ".cs", ".go", ".rs", ".cpp", ".c", ".h"
+    ) else content
+    stripped_lines = stripped.split("\n")
+    
+    confirmed = set()  # 已确认问题去重
+    
+    for i, line in enumerate(stripped_lines, 1):
+        if i > len(lines):
+            break
+        for idx, (pattern, description) in enumerate(SECURITY_RED_FLAGS):
+            match = re.search(pattern, line, re.IGNORECASE)
+            if match:
+                key = (i, idx)
+                if key not in confirmed:
+                    confirmed.add(key)
+                    collector.add("block", "security", filepath, i,
+                                  f"安全问题: {description}",
+                                  "使用环境变量/密钥管理服务存储凭证，使用参数化查询",
+                                  confidence=85)
+    
+    # 第三层：对仅在原始扫描中发现但剥离后未发现的问题，作为低置信度警告
+    for line_no, idx, matched, desc in raw_matches:
+        key = (line_no, idx)
+        if key not in confirmed:
+            # 仅在剥离前匹配 → 可能在注释或字符串中，低置信度
+            collector.add("warn", "security_raw", filepath, line_no,
+                          f"安全问题(低置信度，可能在注释/字符串中): {desc}",
+                          "确认该匹配不在注释或字符串中",
+                          confidence=70)
 
 
-def _check_empty_except(content, filepath, collector):
-    """检测空的或过于简单的异常处理"""
+def _check_empty_except(content, filepath, collector, file_type="source"):
+    """检测空的或过于简单的异常处理（置信度 82）"""
     lines = content.split("\n")
     
     # 匹配 except 块后紧跟 pass 或只有 print
@@ -303,7 +513,8 @@ def _check_empty_except(content, filepath, collector):
             if stripped in ("pass", "") or re.match(r'print\s*\(', stripped):
                 collector.add("warn", "error_handling", filepath, except_line,
                               "异常处理过于简单（pass 或仅 print）",
-                              "添加适当的日志记录和错误处理逻辑")
+                              "添加适当的日志记录和错误处理逻辑",
+                              confidence=82)
             in_except = False
 
 
@@ -383,16 +594,149 @@ def _detect_file_lang(filepath):
     return lang_map.get(ext, "unknown")
 
 
-def check_architecture(source_files, collector):
-    """检测架构分层违规（多语言支持）"""
-    imports = defaultdict(set)
+# ============================================================
+# 依赖图（v2.0: import 依赖追踪 + 循环依赖检测）
+# 参考 mrzadexinho/codeguard 的 import 追踪设计
+# ============================================================
+
+class DependencyGraph:
+    """模块间依赖关系图
+    构建全局依赖图，支持：
+    - 分层违规检测
+    - 循环依赖检测
+    - 依赖方向分析
+    """
+    
+    def __init__(self):
+        self.edges = defaultdict(set)     # file → set of imported files
+        self.reverse = defaultdict(set)    # file → set of files that import it
+        self.layer_map = {}               # file → layer
+        self.lang_map = {}                # file → language
+    
+    def add_edge(self, from_file, to_module):
+        """添加一条依赖边"""
+        self.edges[from_file].add(to_module)
+        self.reverse[to_module].add(from_file)
+    
+    def set_layer(self, filepath, layer):
+        self.layer_map[filepath] = layer
+    
+    def set_lang(self, filepath, lang):
+        self.lang_map[filepath] = lang
+    
+    def find_cycles(self, max_depth=50):
+        """DFS 检测循环依赖
+        
+        返回: [(cycle_files, cycle_path)] 循环依赖列表
+        confidence: 95 (高度确定)
+        """
+        cycles = []
+        all_nodes = list(self.edges.keys())
+        
+        for start in all_nodes:
+            visited = set()
+            path = [start]
+            
+            def dfs(node, depth):
+                if depth > max_depth:
+                    return
+                for neighbor in self.edges.get(node, set()):
+                    # 找到实际文件（模糊匹配）
+                    matching = self._find_matching_files(neighbor)
+                    for actual_file in matching:
+                        if actual_file == start and len(path) > 1:
+                            cycles.append((list(path), path + [actual_file]))
+                            return
+                        if actual_file not in visited and actual_file not in path:
+                            visited.add(actual_file)
+                            path.append(actual_file)
+                            dfs(actual_file, depth + 1)
+                            path.pop()
+            
+            dfs(start, 0)
+        
+        return cycles
+    
+    def _find_matching_files(self, module_or_path):
+        """根据模块名推测对应的文件路径"""
+        results = []
+        module_lower = module_or_path.lower().replace(".", "/")
+        
+        for filepath in self.edges:
+            filepath_lower = filepath.lower().replace("\\", "/")
+            # 检查文件路径是否包含模块路径
+            if module_lower in filepath_lower:
+                results.append(filepath)
+            # 检查模块路径的某部分是否在文件路径中
+            parts = module_lower.split("/")
+            if len(parts) >= 2 and parts[-1] in os.path.basename(filepath_lower):
+                results.append(filepath)
+        
+        return results[:5]  # 限制返回数
+    
+    def check_layer_violations(self, collector):
+        """检查分层违规 + 检测循环依赖"""
+        # 1. 分层违规检测
+        for filepath, imps in self.edges.items():
+            file_layer = self.layer_map.get(filepath, _infer_layer(filepath.lower()))
+            file_type = FileClassifier.classify(filepath)
+            
+            # 跳过非源码文件
+            if file_type in ("generated", "doc", "config"):
+                continue
+            
+            for imp in imps:
+                imp_layer = _infer_layer(imp.lower())
+                
+                # Domain 层不应依赖 Infrastructure 或 Presentation
+                if file_layer == "domain" and imp_layer in ("infrastructure", "presentation"):
+                    # 置信度：如果有精确的 filepath 映射，用90；否则用78
+                    conf = 90 if self._find_matching_files(imp) else 78
+                    collector.add("block", "architecture", filepath, 0,
+                                  f"架构违规：Domain 层引用了 {imp_layer} 层 ({imp})",
+                                  "Domain 层应定义接口，由 Infrastructure 层实现",
+                                  confidence=conf)
+                
+                # Application 层不应直接依赖 Infrastructure 具体实现
+                if file_layer == "application" and imp_layer == "infrastructure":
+                    conf = 88
+                    collector.add("warn", "architecture", filepath, 0,
+                                  f"架构警告：Application 层直接引用 Infrastructure 层 ({imp})",
+                                  "应通过接口/抽象类进行依赖倒置",
+                                  confidence=conf)
+        
+        # 2. 循环依赖检测
+        cycles = self.find_cycles()
+        reported_cycles = set()
+        for cycle_files, cycle_path in cycles:
+            cycle_key = tuple(sorted(cycle_files[:3]))  # 用前3个节点去重
+            if cycle_key not in reported_cycles:
+                reported_cycles.add(cycle_key)
+                first_file = cycle_files[0] if cycle_files else "unknown"
+                cycle_desc = " → ".join([os.path.basename(f) for f in cycle_path[:6]])
+                collector.add("block", "architecture_cycle", first_file, 0,
+                              f"循环依赖检测: {cycle_desc}",
+                              "重构模块结构，使用依赖倒置或接口隔离消除循环",
+                              confidence=95)
+
+
+def build_dependency_graph(source_files):
+    """从源文件列表构建完整依赖图"""
+    graph = DependencyGraph()
     
     for filepath in source_files:
         filepath_lower = filepath.lower()
         
-        # 推断文件所属层级
+        # 跳过非源码文件
+        file_type = FileClassifier.classify(filepath)
+        if file_type in ("generated", "doc", "config"):
+            continue
+        
         file_layer = _infer_layer(filepath_lower)
         file_lang = _detect_file_lang(filepath)
+        
+        graph.set_layer(filepath, file_layer)
+        graph.set_lang(filepath, file_lang)
         
         try:
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
@@ -400,30 +744,22 @@ def check_architecture(source_files, collector):
         except Exception:
             continue
         
-        # 多语言 import 提取（仅匹配文件对应语言的模式）
+        # 多语言 import 提取
         for pattern, lang in MULTILANG_IMPORT_PATTERNS:
             if lang == file_lang:
                 for match in pattern.finditer(content):
                     module = match.group(1) or (match.group(2) if match.lastindex and match.lastindex >= 2 else None)
                     if module:
-                        imports[filepath].add(module)
-                break  # 匹配到语言对应的模式后停止
-        
-        # 检查分层违规
-        for imp in imports[filepath]:
-            imp_layer = _infer_layer(imp.lower())
-            
-            # Domain 层不应依赖 Infrastructure 或 Presentation
-            if file_layer == "domain" and imp_layer in ("infrastructure", "presentation"):
-                collector.add("block", "architecture", filepath, 0,
-                              f"架构违规：Domain 层引用了 {imp_layer} 层 ({imp})",
-                              "Domain 层应定义接口，由 Infrastructure 层实现")
-            
-            # Application 层不应直接依赖 Infrastructure 具体实现
-            if file_layer == "application" and imp_layer == "infrastructure":
-                collector.add("warn", "architecture", filepath, 0,
-                              f"架构警告：Application 层直接引用 Infrastructure 层 ({imp})",
-                              "应通过接口/抽象类进行依赖倒置")
+                        graph.add_edge(filepath, module)
+                break
+    
+    return graph
+
+
+def check_architecture(source_files, collector):
+    """检测架构分层违规 + 循环依赖（v2.0: 基于 DependencyGraph）"""
+    graph = build_dependency_graph(source_files)
+    graph.check_layer_violations(collector)
 
 
 def _infer_layer(path_or_module):
@@ -636,7 +972,11 @@ def _count_java_methods(content):
 # ============================================================
 
 def check_javascript_file(filepath, collector, ext):
-    """JS/TS 专用检测"""
+    """JS/TS 专用检测（v2.0: 置信度评分 + 文件类型感知）"""
+    file_type = FileClassifier.classify(filepath)
+    if file_type in ("generated", "doc"):
+        return
+    
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
@@ -647,46 +987,56 @@ def check_javascript_file(filepath, collector, ext):
     _check_file_size(loc, filepath, collector)
     _check_security(content, filepath, collector)
     
-    # 圈复杂度
+    # 圈复杂度（剥离后正则，置信度 80）
     cc = _compute_cc_regex(content, ext)
     if cc > THRESHOLDS["cyclomatic_complexity_block"]:
-        collector.add("block", "complexity", filepath, 0,
+        collector.add("block", "complexity_regex", filepath, 0,
                       f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
-                      "拆分为多个小函数")
+                      "拆分为多个小函数",
+                      confidence=80)
     elif cc > THRESHOLDS["cyclomatic_complexity_warn"]:
-        collector.add("warn", "complexity", filepath, 0,
+        collector.add("warn", "complexity_regex", filepath, 0,
                       f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_warn']}(警告)",
-                      "考虑拆分为更小的函数")
+                      "考虑拆分为更小的函数",
+                      confidence=80)
     
-    # 嵌套深度
+    # 嵌套深度（大括号计数，置信度 80）
     depth = _compute_nesting_regex(content, ext)
     if depth > THRESHOLDS["max_nesting_block"]:
-        collector.add("block", "nesting", filepath, 0,
+        collector.add("block", "nesting_regex", filepath, 0,
                       f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_block']}(阻塞)",
-                      "使用 early return 减少嵌套")
+                      "使用 early return 减少嵌套",
+                      confidence=80)
     elif depth > THRESHOLDS["max_nesting_warn"]:
-        collector.add("warn", "nesting", filepath, 0,
+        collector.add("warn", "nesting_regex", filepath, 0,
                       f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_warn']}(警告)",
-                      "考虑使用 early return")
+                      "考虑使用 early return",
+                      confidence=80)
     
-    # 参数数量
+    # 参数数量（剥离后正则，置信度 80）
     params = _count_params_regex(content, ext)
     for (func_name, line), count in params.items():
         if count > THRESHOLDS["max_function_params_block"]:
-            collector.add("block", "params", filepath, line,
+            collector.add("block", "params_regex", filepath, line,
                           f"函数 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_block']}(阻塞)",
-                          "封装为参数对象")
+                          "封装为参数对象",
+                          confidence=80)
         elif count > THRESHOLDS["max_function_params_warn"]:
-            collector.add("warn", "params", filepath, line,
+            collector.add("warn", "params_regex", filepath, line,
                           f"函数 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_warn']}(警告)",
-                          "考虑使用参数对象")
+                          "考虑使用参数对象",
+                          confidence=80)
     
     _check_empty_except_generic(content, filepath, collector, ext)
 
 
 def check_java_file(filepath, collector):
-    """Java 专用检测"""
+    """Java 专用检测（v2.0: 置信度评分）"""
     ext = ".java"
+    file_type = FileClassifier.classify(filepath)
+    if file_type in ("generated", "doc"):
+        return
+    
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
@@ -697,53 +1047,53 @@ def check_java_file(filepath, collector):
     _check_file_size(loc, filepath, collector)
     _check_security(content, filepath, collector)
     
-    # 圈复杂度
     cc = _compute_cc_regex(content, ext)
     if cc > THRESHOLDS["cyclomatic_complexity_block"]:
-        collector.add("block", "complexity", filepath, 0,
+        collector.add("block", "complexity_regex", filepath, 0,
                       f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
-                      "拆分为多个小方法")
+                      "拆分为多个小方法", confidence=80)
     elif cc > THRESHOLDS["cyclomatic_complexity_warn"]:
-        collector.add("warn", "complexity", filepath, 0,
+        collector.add("warn", "complexity_regex", filepath, 0,
                       f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_warn']}(警告)",
-                      "考虑拆分")
+                      "考虑拆分", confidence=80)
     
-    # 嵌套深度
     depth = _compute_nesting_regex(content, ext)
     if depth > THRESHOLDS["max_nesting_block"]:
-        collector.add("block", "nesting", filepath, 0,
+        collector.add("block", "nesting_regex", filepath, 0,
                       f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_block']}(阻塞)",
-                      "使用 early return 减少嵌套")
+                      "使用 early return 减少嵌套", confidence=80)
     elif depth > THRESHOLDS["max_nesting_warn"]:
-        collector.add("warn", "nesting", filepath, 0,
+        collector.add("warn", "nesting_regex", filepath, 0,
                       f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_warn']}(警告)",
-                      "考虑使用 early return")
+                      "考虑使用 early return", confidence=80)
     
-    # 参数数量
     params = _count_params_regex(content, ext)
     for (func_name, line), count in params.items():
         if count > THRESHOLDS["max_function_params_block"]:
-            collector.add("block", "params", filepath, line,
+            collector.add("block", "params_regex", filepath, line,
                           f"方法 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_block']}(阻塞)",
-                          "封装为参数对象")
+                          "封装为参数对象", confidence=80)
         elif count > THRESHOLDS["max_function_params_warn"]:
-            collector.add("warn", "params", filepath, line,
+            collector.add("warn", "params_regex", filepath, line,
                           f"方法 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_warn']}(警告)",
-                          "考虑使用参数对象")
+                          "考虑使用参数对象", confidence=80)
     
-    # 类方法数
     method_count = _count_java_methods(content)
     if method_count > THRESHOLDS["max_class_methods_warn"]:
-        collector.add("warn", "class_size", filepath, 0,
+        collector.add("warn", "class_size_regex", filepath, 0,
                       f"类方法数(近似) {method_count} > {THRESHOLDS['max_class_methods_warn']}(警告)",
-                      "检查是否违反单一职责原则")
+                      "检查是否违反单一职责原则", confidence=75)
     
     _check_empty_except_generic(content, filepath, collector, ext)
 
 
 def check_go_file(filepath, collector):
-    """Go 专用检测"""
+    """Go 专用检测（v2.0: 置信度评分）"""
     ext = ".go"
+    file_type = FileClassifier.classify(filepath)
+    if file_type in ("generated", "doc"):
+        return
+    
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
@@ -754,35 +1104,37 @@ def check_go_file(filepath, collector):
     _check_file_size(loc, filepath, collector)
     _check_security(content, filepath, collector)
     
-    # 圈复杂度
     cc = _compute_cc_regex(content, ext)
     if cc > THRESHOLDS["cyclomatic_complexity_block"]:
-        collector.add("block", "complexity", filepath, 0,
+        collector.add("block", "complexity_regex", filepath, 0,
                       f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
-                      "拆分为多个小函数")
+                      "拆分为多个小函数", confidence=80)
     elif cc > THRESHOLDS["cyclomatic_complexity_warn"]:
-        collector.add("warn", "complexity", filepath, 0,
+        collector.add("warn", "complexity_regex", filepath, 0,
                       f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_warn']}(警告)",
-                      "考虑拆分")
+                      "考虑拆分", confidence=80)
     
-    # 参数数量
     params = _count_params_regex(content, ext)
     for (func_name, line), count in params.items():
         if count > THRESHOLDS["max_function_params_block"]:
-            collector.add("block", "params", filepath, line,
+            collector.add("block", "params_regex", filepath, line,
                           f"函数 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_block']}(阻塞)",
-                          "封装为结构体参数")
+                          "封装为结构体参数", confidence=80)
         elif count > THRESHOLDS["max_function_params_warn"]:
-            collector.add("warn", "params", filepath, line,
+            collector.add("warn", "params_regex", filepath, line,
                           f"函数 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_warn']}(警告)",
-                          "考虑使用参数结构体")
+                          "考虑使用参数结构体", confidence=80)
     
     _check_empty_except_generic(content, filepath, collector, ext)
 
 
 def check_csharp_file(filepath, collector):
-    """C# 专用检测"""
+    """C# 专用检测（v2.0: 置信度评分）"""
     ext = ".cs"
+    file_type = FileClassifier.classify(filepath)
+    if file_type in ("generated", "doc"):
+        return
+    
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
@@ -793,60 +1145,56 @@ def check_csharp_file(filepath, collector):
     _check_file_size(loc, filepath, collector)
     _check_security(content, filepath, collector)
     
-    # 圈复杂度
     cc = _compute_cc_regex(content, ext)
     if cc > THRESHOLDS["cyclomatic_complexity_block"]:
-        collector.add("block", "complexity", filepath, 0,
+        collector.add("block", "complexity_regex", filepath, 0,
                       f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
-                      "拆分为多个小方法")
+                      "拆分为多个小方法", confidence=80)
     elif cc > THRESHOLDS["cyclomatic_complexity_warn"]:
-        collector.add("warn", "complexity", filepath, 0,
+        collector.add("warn", "complexity_regex", filepath, 0,
                       f"圈复杂度(近似) {cc} > {THRESHOLDS['cyclomatic_complexity_warn']}(警告)",
-                      "考虑拆分")
+                      "考虑拆分", confidence=80)
     
-    # 嵌套深度
     depth = _compute_nesting_regex(content, ext)
     if depth > THRESHOLDS["max_nesting_block"]:
-        collector.add("block", "nesting", filepath, 0,
+        collector.add("block", "nesting_regex", filepath, 0,
                       f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_block']}(阻塞)",
-                      "使用 early return 减少嵌套")
+                      "使用 early return 减少嵌套", confidence=80)
     elif depth > THRESHOLDS["max_nesting_warn"]:
-        collector.add("warn", "nesting", filepath, 0,
+        collector.add("warn", "nesting_regex", filepath, 0,
                       f"嵌套深度(近似) {depth} > {THRESHOLDS['max_nesting_warn']}(警告)",
-                      "考虑使用 early return")
+                      "考虑使用 early return", confidence=80)
     
-    # 参数数量
     params = _count_params_regex(content, ext)
     for (func_name, line), count in params.items():
         if count > THRESHOLDS["max_function_params_block"]:
-            collector.add("block", "params", filepath, line,
+            collector.add("block", "params_regex", filepath, line,
                           f"方法 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_block']}(阻塞)",
-                          "封装为参数对象")
+                          "封装为参数对象", confidence=80)
         elif count > THRESHOLDS["max_function_params_warn"]:
-            collector.add("warn", "params", filepath, line,
+            collector.add("warn", "params_regex", filepath, line,
                           f"方法 '{func_name}' 参数 {count} > {THRESHOLDS['max_function_params_warn']}(警告)",
-                          "考虑使用参数对象")
+                          "考虑使用参数对象", confidence=80)
     
-    # 类方法数
     method_count = _count_java_methods(content)
     if method_count > THRESHOLDS["max_class_methods_warn"]:
-        collector.add("warn", "class_size", filepath, 0,
+        collector.add("warn", "class_size_regex", filepath, 0,
                       f"类方法数(近似) {method_count} > {THRESHOLDS['max_class_methods_warn']}(警告)",
-                      "检查是否违反单一职责原则")
+                      "检查是否违反单一职责原则", confidence=75)
     
     _check_empty_except_generic(content, filepath, collector, ext)
 
 
 def _check_file_size(loc, filepath, collector):
-    """通用文件大小检查"""
+    """通用文件大小检查（置信度 95）"""
     if loc > THRESHOLDS["max_file_lines_block"]:
         collector.add("block", "file_size", filepath, 0,
                       f"文件代码行数 {loc} > {THRESHOLDS['max_file_lines_block']}（阻塞阈值）",
-                      "将文件拆分为多个模块")
+                      "将文件拆分为多个模块", confidence=95)
     elif loc > THRESHOLDS["max_file_lines_warn"]:
         collector.add("warn", "file_size", filepath, 0,
                       f"文件代码行数 {loc} > {THRESHOLDS['max_file_lines_warn']}（警告阈值）",
-                      "考虑拆分大文件")
+                      "考虑拆分大文件", confidence=95)
 
 
 def check_generic_file(filepath, collector, ext):
@@ -905,7 +1253,8 @@ def _check_empty_except_generic(content, filepath, collector, ext):
                 if body_after in empty_body or body_after == "{}" or body_after == "{ }":
                     collector.add("warn", "error_handling", filepath, handler_line,
                                   "异常处理过于简单（同行空体）",
-                                  "添加适当的日志记录和错误处理逻辑")
+                                  "添加适当的日志记录和错误处理逻辑",
+                                  confidence=82)
                     continue
             in_handler = True
             continue
@@ -914,7 +1263,8 @@ def _check_empty_except_generic(content, filepath, collector, ext):
                (ext == ".go" and stripped in ("return", "return nil", "return err")):
                 collector.add("warn", "error_handling", filepath, handler_line,
                               "异常处理过于简单",
-                              "添加适当的日志记录和错误处理逻辑")
+                              "添加适当的日志记录和错误处理逻辑",
+                              confidence=82)
             in_handler = False
 
 
@@ -1173,7 +1523,7 @@ def run_quality_check(root_path, mode="personal"):
     # 加载自定义规则
     custom_rules = load_custom_quality_rules(root_path)
     if custom_rules:
-        print(f"[code-guardian] 加载 {len(custom_rules)} 条自定义规则")
+        print(f"[CodeGuard] 加载 {len(custom_rules)} 条自定义规则")
     
     # 1. 逐文件检测（多语言派发）
     for filepath in source_files:
@@ -1206,7 +1556,7 @@ def run_quality_check(root_path, mode="personal"):
 
 
 def output_json(collector):
-    """输出 JSON 格式"""
+    """输出 JSON 格式（v2.0: 包含置信度）"""
     result = {
         "summary": collector.summary(),
         "issues": sorted(collector.issues, key=lambda x: (
@@ -1216,11 +1566,24 @@ def output_json(collector):
             x["line"]
         ))
     }
+    # 置信度分布统计
+    confidences = [i.get("confidence", 80) for i in collector.issues]
+    result["confidence_stats"] = {
+        "avg": round(sum(confidences) / len(confidences), 1) if confidences else 0,
+        "min": min(confidences) if confidences else 0,
+        "max": max(confidences) if confidences else 0,
+        "distribution": {
+            "90-100": len([c for c in confidences if c >= 90]),
+            "80-89": len([c for c in confidences if 80 <= c < 90]),
+            "70-79": len([c for c in confidences if 70 <= c < 80]),
+            "60-69": len([c for c in confidences if c < 70]),
+        }
+    }
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def output_text(collector):
-    """输出可读文本格式"""
+    """输出可读文本格式（v2.0: 显示置信度）"""
     issues = sorted(collector.issues, key=lambda x: (
         {"block": 0, "warn": 1, "info": 2}[x["severity"]],
         x["category"],
@@ -1230,7 +1593,7 @@ def output_text(collector):
     
     for issue in issues:
         prefix = {"block": "[BLOCK]", "warn": "[WARN]", "info": "[INFO]"}[issue["severity"]]
-        print(f"\n{prefix} {issue['category']}")
+        print(f"\n{prefix} {issue['category']}  (置信度: {issue.get('confidence', '?')}%)")
         print(f"  文件: {issue['file']}:{issue['line']}")
         print(f"  问题: {issue['message']}")
         if issue["suggestion"]:

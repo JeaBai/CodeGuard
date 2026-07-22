@@ -10,7 +10,10 @@
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
   <img src="https://img.shields.io/badge/dependencies-zero-brightgreen" alt="零依赖">
   <img src="https://img.shields.io/badge/coverage-16%2F16%20categories-9cf" alt="检测覆盖">
+  <img src="https://img.shields.io/badge/MCP-compatible-purple" alt="MCP协议">
+  <img src="https://img.shields.io/badge/confidence-0--100-orange" alt="置信度评分">
   <img src="https://img.shields.io/badge/status-production%20ready-success" alt="状态">
+  <img src="https://img.shields.io/badge/version-2.0.0-blueviolet" alt="v2.0.0">
 </p>
 
 ---
@@ -33,13 +36,23 @@ AI 编程工具每天生成数十亿行代码。但数据不会说谎：
 CodeGuard 建立**三层防线**，在 AI 生成代码的每一刻自动介入：
 
 ```
- ┌──────────────────────────────────────────────────────┐
- │  第一层  │  生成前          │  注入架构约束到上下文      │
- │  第二层  │  生成中          │  逐项自查分层/复杂度/安全  │
- │  第三层  │  生成后          │  脚本门禁，JSON 质量报告   │
- └──────────────────────────────────────────────────────┘
+ ┌──────────────────────────────────────────────────────────┐
+ │  第一层  │  生成前  │  注入架构约束 + FileClassifier     │
+ │  第二层  │  生成中  │  逐项自查 + 置信度评分              │
+ │  第三层  │  生成后  │  DependencyGraph + 双扫描安全       │
+ └──────────────────────────────────────────────────────────┘
           ↓ 退出码: 0=PASS / 1=WARN / 2=BLOCK
 ```
+
+**v2.0 新增能力：**
+
+| 能力 | 描述 | 模块 |
+|------|------|------|
+| 🖥️ MCP 协议 | JSON-RPC 2.0 over stdio，Claude Code/Cursor/VS Code 即插即用 | `mcp_server.py` |
+| 📊 置信度评分 | 每条问题 0-100 分 (90+=AST/80+=剥离正则/70+=原始正则) | `IssueCollector` |
+| 📁 文件类型感知 | test/config/generated/migration/doc 6 种类型规则自适应 | `FileClassifier` |
+| 🔄 循环依赖 | DFS 依赖图 A→B→C→A 检测 (置信度 95) | `DependencyGraph` |
+| 🔍 双扫描安全 | 剥离前+后双重匹配去重，消除注释误报 | `_check_security` |
 
 **实测对比（同一功能，AI 风格 vs 人类风格）：**
 
@@ -57,12 +70,30 @@ CodeGuard 建立**三层防线**，在 AI 生成代码的每一刻自动介入�
 
 ## ⚡ Quick Start
 
+### CodeBuddy Skill 模式
 ```bash
 # 一行安装（个人）
 cp -r CodeGuard/ ~/.codebuddy/skills/
 
 # 或团队共享
 cp -r CodeGuard/ .codebuddy/skills/
+```
+
+### MCP 跨平台模式 (Claude Code / Cursor / VS Code)
+```bash
+# 启动 MCP Server (stdio 模式)
+python scripts/mcp_server.py --project-root .
+
+# 或配置到 MCP 客户端:
+# Claude Code: 在 claude_desktop_config.json 添加
+{
+  "mcpServers": {
+    "codeguard": {
+      "command": "python",
+      "args": ["path/to/mcp_server.py", "--project-root", "."]
+    }
+  }
+}
 ```
 
 之后 AI 生成代码时**自动激活**。也可以手动运行：

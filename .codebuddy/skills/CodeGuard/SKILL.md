@@ -1,22 +1,103 @@
 ---
 name: CodeGuard
 description: >
-  防止 AI 生成代码沦为"死山代码"的质量守护 Skill。
+  防止 AI 生成代码沦为"死山代码"的质量守护 Skill / MCP Server (v2.0)。
   在 AI 生成代码前自动注入架构约束，生成后执行质量门禁检查。
-  检测圈复杂度、重复代码、架构分层违规、安全漏洞等问题。
+  支持 CodeBuddy Skill 模式 + MCP 协议跨平台模式 (Claude Code/Cursor/VS Code)。
+  检测圈复杂度、重复代码、架构分层违规、循环依赖、安全漏洞等问题。
+  输出置信度评分 (90-100=AST精确/80-89=高/70-79=中/60-69=低)。
   当用户请求生成/修改代码、重构、或提及代码质量、架构、技术债务时应触发。
-  基于验证过的实证研究设计（GitClear 2025, Sonar 2026, DORA 2024, CodeRabbit 2025, Veracode 2025）。
+  基于验证过的实证研究设计 (GitClear 2025, Sonar 2026, DORA 2024, CodeRabbit 2025, Veracode 2025)。
 ---
 
-# Code Guardian — AI 代码质量守护者
+# CodeGuard — AI 代码质量守护者 (v2.0)
 
 ## 概述
 
-防止 AI 生成代码沦为"死山代码"（难以维护、结构混乱、技术债务累积）。
+防止 AI 生成代码沦为"死山代码"。v2.0 新增 **MCP 协议支持**、**置信度评分**、**文件类型感知**和**循环依赖检测**，覆盖所有主流 MCP 客户端。
+
+**两大运行模式：**
+
+| 模式 | 入口 | 适用场景 |
+|------|------|---------|
+| **CodeBuddy Skill** | 自动激活 (SKILL.md) | CodeBuddy 内 AI 辅助编程 |
+| **MCP Server** | `python scripts/mcp_server.py` | Claude Code / Cursor / VS Code / 任意 MCP 客户端 |
 
 **核心命题**：当前 AI 编程工具的对话式交互每次都是独立上下文，天然缺乏对项目全局架构的持续感知。实证数据（GitClear 2025，2.11 亿行代码）显示 AI 辅助编程已导致代码返工率上升 39%、重构占比下降 60%、复制粘贴代码增长 48%。
 
 **解决路径**：建立"生成前约束注入 → 生成中检查提醒 → 生成后脚本验证"三层防线 + 修复指引，从根源遏制死山代码。
+
+## MCP 协议跨平台支持 (v2.0)
+
+CodeGuard v2.0 实现了完整的 MCP (Model Context Protocol) 服务器，遵循 JSON-RPC 2.0 over stdio 规范。
+
+### 配置方式
+
+**Claude Code:**
+```json
+{ "mcpServers": { "codeguard": { "command": "python", "args": ["scripts/mcp_server.py"] } } }
+```
+
+**Cursor / VS Code:**
+在 `.cursor/mcp.json` 或 VS Code MCP 设置中添加：
+```json
+{ "mcpServers": { "codeguard": { "command": "python", "args": ["path/to/mcp_server.py"] } } }
+```
+
+### MCP Tool 清单
+
+| Tool | 描述 | 输入 |
+|------|------|------|
+| `review_file` | 单文件完整检测 (含置信度) | `file_path`, `mode` |
+| `review_diff` | Git diff 增量检测 | `project_root`, `mode` |
+| `execute_rules` | 列出所有活跃规则 | `project_root` |
+| `inject_constraints` | 生成架构约束提示 | `project_root`, `format` |
+
+### MCP Resource 清单
+
+| URI | 描述 |
+|-----|------|
+| `codeguard://rules/default` | 默认规则集 (JSON) |
+| `codeguard://config/project` | 项目自定义配置 |
+
+## v2.0 新增能力
+
+### 1. 置信度评分
+
+每项检测输出 0-100 置信度分数，按 mrzadexinho/codeguard 的设计标准：
+
+| 置信度 | 等级 | 来源 |
+|--------|------|------|
+| 90-100 | 确定 | AST 精确分析、循环依赖 |
+| 80-89 | 高 | 剥离注释/字符串后的正则、架构分析 |
+| 70-79 | 中 | 原始正则 (含注释噪音)、类方法数近似 |
+| 60-69 | 低 | 启发式推断、统计模式 |
+
+### 2. 文件类型感知 (FileClassifier)
+
+自动识别 6 种文件类型并调整规则行为：
+
+| 类型 | 触发条件 | 规则调整 |
+|------|---------|---------|
+| `source` | 默认 | 全量检测 |
+| `test` | `test_*/_test.*/tests/` | 跳过安全规则 |
+| `config` | `.json/.yaml/.toml` 非 src | 跳过复杂度，保留安全 |
+| `generated` | `generated/_pb2/_grpc/` | 跳过所有，仅标记 |
+| `migration` | `migration/` `.sql` | 跳过复杂度，保留 SQL 注入 |
+| `doc` | `.md` `docs/` | 全部跳过 |
+
+### 3. 依赖图 (DependencyGraph)
+
+构建全局模块依赖图，检测：
+- **分层违规**：Domain→Infrastructure (block)、Application→Infrastructure (warn)
+- **循环依赖**：DFS 检测 A→B→C→A 模式 (block, 置信度 95)
+
+### 4. 双扫描安全检测
+
+安全检测分两遍执行：
+- 第一遍：原始内容快速筛 (置信度 70)
+- 第二遍：剥离注释/字符串后精确匹 (置信度 85)
+- 两层匹配结果合并去重，消除注释/字符串中的误报
 
 ## 触发条件
 
@@ -261,6 +342,15 @@ python scripts/quality_check.py --path <project_root> --mode diff --format json
 | 团队全量检测 | `python scripts/quality_check.py --path . --mode team` | Reviewer |
 | 增量检测（仅变更文件） | `python scripts/quality_check.py --path . --mode diff` | Reviewer |
 | 文本格式输出 | `python scripts/quality_check.py --path . --format text` | — |
+
+### scripts/mcp_server.py (v2.0)
+
+MCP 协议服务端，JSON-RPC 2.0 over stdio。
+
+| 场景 | 命令 |
+|------|------|
+| 启动 MCP Server | `python scripts/mcp_server.py --project-root .` |
+| MCP 客户端配置 | 参见上方 "MCP 协议跨平台支持" 节 |
 
 ### 检测范围对照
 
