@@ -1,6 +1,6 @@
 {
   "_comment": "CodeGuard 金级（核心系统）质量门禁预设 — 腾讯金级标准",
-  "_version": "2.0.8",
+  "_version": "2.0.9",
   "_usage": "将此文件放置于项目根目录的 .code-guardian/ 文件夹即可自动生效",
 
   "thresholds": {

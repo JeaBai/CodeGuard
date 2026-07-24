@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/MCP-compatible-purple" alt="MCP协议">
   <img src="https://img.shields.io/badge/confidence-0--100-orange" alt="置信度评分">
   <img src="https://img.shields.io/badge/status-production%20ready-success" alt="状态">
-  <img src="https://img.shields.io/badge/version-2.0.8-blueviolet" alt="v2.0.7">
+  <img src="https://img.shields.io/badge/version-2.0.9-blueviolet" alt="v2.0.7">
 </p>
 
 ---

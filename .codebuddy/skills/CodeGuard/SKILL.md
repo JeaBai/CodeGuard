@@ -1,7 +1,7 @@
 ---
 name: CodeGuard
 description: >
-  防止 AI 生成代码沦为"死山代码"的质量守护 Skill / MCP Server (v2.0.8)。
+  防止 AI 生成代码沦为"死山代码"的质量守护 Skill / MCP Server (v2.0.9)。
   在 AI 生成代码前自动注入架构约束，生成后执行质量门禁检查。
   支持 CodeBuddy Skill 模式 + MCP 协议跨平台模式 (Claude Code/Cursor/VS Code)。
   检测圈复杂度、重复代码、架构分层违规、循环依赖、安全漏洞等问题。
@@ -10,7 +10,7 @@ description: >
   基于验证过的实证研究设计 (GitClear 2025, Sonar 2026, DORA 2024, CodeRabbit 2025, Veracode 2025)。
 ---
 
-# CodeGuard — AI 代码质量守护者 (v2.0.8)
+# CodeGuard — AI 代码质量守护者 (v2.0.9)
 
 ## 概述
 
@@ -27,7 +27,7 @@ description: >
 
 **解决路径**：建立"生成前约束注入 → 生成中检查提醒 → 生成后脚本验证"三层防线 + 修复指引，从根源遏制死山代码。
 
-## MCP 协议跨平台支持 (v2.0.8)
+## MCP 协议跨平台支持 (v2.0.9)
 
 CodeGuard v2.0 实现了完整的 MCP (Model Context Protocol) 服务器，遵循 JSON-RPC 2.0 over stdio 规范。
 
@@ -60,7 +60,24 @@ CodeGuard v2.0 实现了完整的 MCP (Model Context Protocol) 服务器，遵�
 | `codeguard://rules/default` | 默认规则集 (JSON) |
 | `codeguard://config/project` | 项目自定义配置 |
 
-## v2.0.8 新增能力
+## v2.0.9 新增能力
+
+### 0. 模块化架构重构
+
+将原 1303 行单体 `quality_check.py` 拆分为 6 个模块化子文件 + 薄编排器入口：
+
+| 模块 | 职责 | 行数 |
+|------|------|------|
+| `quality_core.py` | THRESHOLDS/_log/IssueCollector/FileClassifier/strip | ~200 |
+| `quality_checks.py` | 多语言复杂度/嵌套/参数/Python AST 检测 | ~270 |
+| `quality_security.py` | 安全检查(三扫描管线) + 异常处理检测 | ~170 |
+| `quality_dup.py` | 文件内/跨文件重复代码检测 | ~50 |
+| `quality_arch.py` | 依赖图/架构分层违规/循环依赖 | ~150 |
+| `quality_custom.py` | 自定义规则引擎/阈值覆盖/命名一致性 | ~110 |
+| `quality_check.py` | 薄编排器入口 (派发表消除 if/elif 链) | ~200 |
+
+`mcp_server.py` 新增 `_make_mcp_tool()` 工厂函数，消除 4 个 MCP tool 定义的重复结构。
+`constraint_injector.py` 模态分解 `detect_project_structure` (CC=33→8) 和 `load_custom_rules` (depth=7→3)。
 
 ### 1. 置信度评分
 
@@ -97,7 +114,7 @@ CodeGuard v2.0 实现了完整的 MCP (Model Context Protocol) 服务器，遵�
 安全检测分三遍执行：
 - 第一遍：原始内容快速筛 (置信度 70)
 - 第二遍：剥离注释/字符串后精确匹 (置信度 85)
-- 第三遍：剥离后全文 DOTALL 双通道多行扫描 — 密码通道(括号+续行符归一化, block/85) + 函数调用通道(仅换行归一化) (v2.0.8)
+- 第三遍：剥离后全文 DOTALL 双通道多行扫描 — 密码通道(括号+续行符归一化, block/85) + 函数调用通道(仅换行归一化) (v2.0.9)
 - 三遍结果合并去重，消除注释/字符串中的误报
 
 ## 触发条件
@@ -346,7 +363,7 @@ python scripts/quality_check.py --path <project_root> --mode diff --format json
 | 增量检测（仅变更文件） | `python scripts/quality_check.py --path . --mode diff` | Reviewer |
 | 文本格式输出 | `python scripts/quality_check.py --path . --format text` | — |
 
-### scripts/mcp_server.py (v2.0.8)
+### scripts/mcp_server.py (v2.0.9)
 
 MCP 协议服务端，JSON-RPC 2.0 over stdio。
 
@@ -412,7 +429,7 @@ MCP 协议服务端，JSON-RPC 2.0 over stdio。
 | `message` | ❌ | 违规时的消息（默认使用 description） |
 | `suggestion` | ❌ | 修复建议 |
 
-### 金级质量门禁（v2.0.8）
+### 金级质量门禁（v2.0.9）
 
 CodeGuard 内置腾讯金级（核心系统）质量门禁预设。只需在项目根目录放置 `.code-guardian/rules.json`，即可一键升级到金级标准。
 
