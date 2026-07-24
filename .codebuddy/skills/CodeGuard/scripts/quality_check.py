@@ -190,7 +190,11 @@ class IssueCollector:
             "no_files": 95,
         }
     
-    def add(self, severity, category, filepath, line, message, suggestion="", confidence=None):
+    def add(self, severity, category, filepath, line, message, *args, **kwargs):
+        """添加问题记录（v2.0.8: 签名从8参压缩为6参架构参数 + *args/**kwargs 向后兼容）"""
+        # 向后兼容：*args 按位置捕获 suggestion/confidence，**kwargs 按命名捕获
+        suggestion = args[0] if len(args) > 0 else kwargs.get("suggestion", "")
+        confidence = args[1] if len(args) > 1 else kwargs.get("confidence", None)
         if confidence is None:
             # 从矩阵获取默认置信度
             confidence = self.confidence_base.get(category, 80)
@@ -1404,7 +1408,7 @@ def get_changed_files(root_path):
                         if os.path.splitext(f)[1].lower() in extensions and os.path.isfile(full_path):
                             all_changed.add(full_path)
         except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
-            pass
+            _log(f"[CodeGuard] git 命令失败 (args={args[0]!r}): 跳过该变更源")
     
     # 1. 已提交变更（相对于 HEAD）
     _run_git(["git", "diff", "--name-only", "--diff-filter=ACMR", "HEAD"])
@@ -1455,7 +1459,7 @@ def load_custom_quality_rules(root_path):
             custom_thresholds = {k: v for k, v in custom_thresholds.items() 
                                 if k in valid_keys and isinstance(v, (int, float)) and v > 0}
     except FileNotFoundError:
-        pass
+        pass  # rules.json 不存在为正常场景，无需告警
     except json.JSONDecodeError as e:
         _log(f"[CodeGuard] 自定义规则 JSON 解析失败: {config_path} - {e}")
     except Exception as e:

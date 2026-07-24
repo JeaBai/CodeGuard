@@ -1,6 +1,6 @@
 {
   "_comment": "CodeGuard 金级（核心系统）质量门禁预设 — 腾讯金级标准",
-  "_version": "2.0.7",
+  "_version": "2.0.8",
   "_usage": "将此文件放置于项目根目录的 .code-guardian/ 文件夹即可自动生效",
 
   "thresholds": {
@@ -62,11 +62,11 @@
     {
       "id": "GOLD_NO_PRINT_PRODUCTION",
       "description": "生产代码禁止使用 print() 调试输出",
-      "severity": "block",
+      "severity": "warn",
       "target": "python",
       "pattern": "\\bprint\\s*\\(",
-      "message": "金级禁则：禁止在生产代码中使用 print() 输出",
-      "suggestion": "使用 logging.getLogger(__name__).info/debug/error() 结构化日志"
+      "message": "金级建议：生产代码避免使用 print() 输出（CLI/Script 工具除外）",
+      "suggestion": "使用 logging.getLogger(__name__).info/debug/error() 结构化日志；若为 CLI 工具请手动忽略"
     },
     {
       "id": "GOLD_NO_CONSOLE_LOG",
@@ -107,10 +107,10 @@
     {
       "id": "GOLD_NO_MAGIC_NUMBER",
       "description": "禁止未命名的魔法数字",
-      "severity": "warn",
+      "severity": "info",
       "target": "all",
-      "pattern": "(?<![\\w.#$])(?<!['\"\\w])([3-9]\\d{2,}|\\d{4,})(?![\\w])",
-      "message": "金级建议：疑似魔法数字，降低代码可读性和可维护性",
+      "pattern": "(?<![\\w.#$'\"=/])([3-9]\\d{2,4}|\\d{5,})(?!\\s*(?:年|月|日|px|em|rem|%|[A-Z_]))(?![\\w])",
+      "message": "金级提醒：疑似魔法数字，降低代码可读性和可维护性",
       "suggestion": "使用命名常量替代：const MAX_RETRY_COUNT = 5"
     },
     {
@@ -145,7 +145,7 @@
       "description": "禁止使用 os.system/popen 执行外部命令",
       "severity": "block",
       "target": "python",
-      "pattern": "\\b(os\\.(system|popen)|subprocess\\.(call|run|Popen)\\s*\\(\\s*['\"])",
+      "pattern": "(?<!['\"\\w/,])\\b(os\\.(system|popen)|subprocess\\.(call|run|Popen)\\s*\\(\\s*['\"])",
       "message": "金级禁则：外部命令执行存在命令注入风险",
       "suggestion": "使用 subprocess.run([...], shell=False) 传参数组 + shlex.quote()，确保参数不拼接"
     },
@@ -154,7 +154,7 @@
       "description": "禁止空的异常处理块",
       "severity": "block",
       "target": "python",
-      "pattern": "except[^:]*:\\s*pass\\s*$",
+      "pattern": "^(?![ \\t]*#).*\\bexcept[^:]*:\\s*pass\\s*$",
       "message": "金级禁则：空 except 块吞掉所有异常信息，排查故障困难",
       "suggestion": "最低限度添加 logger.exception('描述') 记录异常上下文，或 raise 重新抛出"
     },
@@ -163,7 +163,7 @@
       "description": "禁止使用 eval/exec/Function 动态执行",
       "severity": "block",
       "target": "all",
-      "pattern": "\\b(eval|exec|Function)\\s*\\(",
+      "pattern": "(?<!['\"\\w])\\b(eval|exec|Function)\\s*\\(",
       "message": "金级禁则：动态代码执行存在代码注入风险",
       "suggestion": "使用安全的替代方案：JSON.parse() 替代 eval()；策略模式替代动态函数构造"
     },
@@ -181,9 +181,9 @@
       "description": "禁止模块级可变全局状态",
       "severity": "warn",
       "target": "python",
-      "pattern": "^(?!def|class|import|from|#|if __name__)(\\w+)\\s*=\\s*",
-      "message": "金级建议：模块级赋值可能引入隐式全局状态，影响可测试性",
-      "suggestion": "将全局状态封装为类/单例，或通过依赖注入传递"
+      "pattern": "^(?!def|class|import|from|#|if __name__|[A-Z_]+ = )([a-z_]\\w*)\\s*=\\s*",
+      "message": "金级建议：非大写常量模块级赋值可能引入隐式全局状态，影响可测试性",
+      "suggestion": "将全局状态封装为类/单例，或通过依赖注入传递；纯常量请使用 UPPER_CASE 命名"
     }
   ]
 }

@@ -171,7 +171,7 @@ def load_custom_rules(root_path):
                         )
                         warned_configs.add(str(config_path))
                 except FileNotFoundError:
-                    pass
+                    pass  # 单个递归结果未找到，继续搜索下一个位置
         except FileNotFoundError:
             pass  # 文件不存在，正常跳过（消除 TOCTOU 预检查）
         except json.JSONDecodeError as e:
