@@ -16,32 +16,43 @@ from pathlib import Path
 import quality_core as _core
 
 
-def load_custom_quality_rules(root_path):
-    """加载 .code-guardian/rules.json 中的自定义规则 + 阈值覆盖"""
-    custom_rules = []
-    custom_thresholds = None
-    config_path = Path(root_path) / ".code-guardian" / "rules.json"
-    
+# ---- load_custom_quality_rules 子函数 ----
+
+def _read_rules_json(config_path):
+    """读取 .code-guardian/rules.json，返回 (rules, raw_thresholds)"""
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if "rules" in data:
-            custom_rules = data["rules"]
-        if "thresholds" in data and isinstance(data["thresholds"], dict):
-            custom_thresholds = data["thresholds"]
-            valid_keys = set(_core.THRESHOLDS.keys())
-            unknown = {k for k in custom_thresholds if k not in valid_keys and not k.startswith('_')}
-            if unknown:
-                _core._log(f"[CodeGuard] ⚠️ 未知阈值键将被忽略: {', '.join(sorted(unknown))}")
-            custom_thresholds = {k: v for k, v in custom_thresholds.items()
-                                if k in valid_keys and isinstance(v, (int, float)) and v > 0}
+        rules = data.get("rules", [])
+        thresholds = data.get("thresholds")
+        return rules, thresholds
     except FileNotFoundError:
-        pass
+        return [], None
     except json.JSONDecodeError as e:
         _core._log(f"[CodeGuard] 自定义规则 JSON 解析失败: {config_path} - {e}")
+        return [], None
     except Exception as e:
         _core._log(f"[CodeGuard] 加载自定义规则异常: {config_path} - {e}")
-    
+        return [], None
+
+
+def _validate_thresholds(custom_thresholds):
+    """验证并过滤自定义阈值，记录未知键"""
+    if not isinstance(custom_thresholds, dict):
+        return None
+    valid_keys = set(_core.THRESHOLDS.keys())
+    unknown = {k for k in custom_thresholds if k not in valid_keys and not k.startswith('_')}
+    if unknown:
+        _core._log(f"[CodeGuard] ⚠️ 未知阈值键将被忽略: {', '.join(sorted(unknown))}")
+    return {k: v for k, v in custom_thresholds.items()
+            if k in valid_keys and isinstance(v, (int, float)) and v > 0} or None
+
+
+def load_custom_quality_rules(root_path):
+    """加载 .code-guardian/rules.json 中的自定义规则 + 阈值覆盖 — v2.0.10: CC=16→3"""
+    config_path = Path(root_path) / ".code-guardian" / "rules.json"
+    custom_rules, raw_thresholds = _read_rules_json(config_path)
+    custom_thresholds = _validate_thresholds(raw_thresholds) if raw_thresholds else None
     return custom_rules, custom_thresholds
 
 

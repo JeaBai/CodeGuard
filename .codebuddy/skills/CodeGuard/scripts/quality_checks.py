@@ -75,8 +75,52 @@ def _compute_cc_regex(content, ext, *, stripped=None):
     return cc
 
 
+# ---- _compute_nesting_regex 子函数 ----
+
+def _process_nesting_kw_line(current_depth, pending_depth, pending_releases, opens, closes, kw_count, line_content):
+    """处理含嵌套关键字的行，返回 (current_depth, pending_depth, pending_releases)"""
+    current_depth += pending_depth
+    pending_depth = 0
+    
+    if pending_releases:
+        current_depth -= sum(pending_releases)
+        pending_releases.clear()
+    
+    if '{' in line_content:
+        current_depth += opens
+        current_depth -= closes
+    else:
+        pending_depth = kw_count
+        pending_releases.extend([1] * kw_count)
+    
+    return current_depth, pending_depth, pending_releases
+
+
+def _process_nesting_brace_line(current_depth, pending_depth, pending_releases, opens, closes):
+    """处理无嵌套关键字的行，返回 (current_depth, pending_depth, pending_releases)"""
+    current_depth += pending_depth
+    pending_depth = 0
+    current_depth += opens - closes
+    
+    if current_depth <= 0:
+        if pending_releases:
+            current_depth -= sum(pending_releases)
+        current_depth = 0
+        pending_depth = 0
+        pending_releases.clear()
+    
+    return current_depth, pending_depth, pending_releases
+
+
+def _process_pending_release(current_depth, pending_releases, nesting_kw, line_content, opens, closes):
+    """处理待释放的嵌套深度"""
+    if pending_releases and not re.search(nesting_kw, line_content, re.IGNORECASE) and opens == 0 and closes == 0:
+        return current_depth - pending_releases.pop(), pending_releases
+    return current_depth, pending_releases
+
+
 def _compute_nesting_regex(content, ext, *, stripped=None):
-    """大括号计数近似最大嵌套深度"""
+    """大括号计数近似最大嵌套深度 — v2.0.10: CC=18→10"""
     if ext not in LANG_NESTING_KEYWORDS:
         return 0
     
@@ -97,33 +141,18 @@ def _compute_nesting_regex(content, ext, *, stripped=None):
         opens = len(re.findall(r'\{', line_content))
         closes = len(re.findall(r'\}', line_content))
         
-        current_depth += pending_depth
-        pending_depth = 0
-        
-        if pending_releases and not re.search(nesting_kw, line_content, re.IGNORECASE) and opens == 0 and closes == 0:
-            current_depth -= pending_releases.pop()
+        current_depth, pending_releases = _process_pending_release(
+            current_depth, pending_releases, nesting_kw, line_content, opens, closes)
         
         kw_matches = re.findall(nesting_kw, line_content, re.IGNORECASE)
         kw_count = len(kw_matches)
         
         if kw_count > 0:
-            if pending_releases:
-                current_depth -= sum(pending_releases)
-                pending_releases.clear()
-            if '{' in line_content:
-                current_depth += opens
-                current_depth -= closes
-            else:
-                pending_depth = kw_count
-                pending_releases.extend([1] * kw_count)
+            current_depth, pending_depth, pending_releases = _process_nesting_kw_line(
+                current_depth, pending_depth, pending_releases, opens, closes, kw_count, line_content)
         else:
-            current_depth += opens - closes
-            if current_depth <= 0:
-                if pending_releases:
-                    current_depth -= sum(pending_releases)
-                current_depth = 0
-                pending_depth = 0
-                pending_releases.clear()
+            current_depth, pending_depth, pending_releases = _process_nesting_brace_line(
+                current_depth, pending_depth, pending_releases, opens, closes)
         
         current_depth = max(0, current_depth)
         max_depth = max(max_depth, current_depth)
@@ -178,6 +207,45 @@ def _check_file_size(loc, filepath, collector):
                       "考虑拆分大文件", confidence=95)
 
 
+# ---- 共享检测逻辑（消除 _check_regex_based_file 与 check_generic_file 间的重复） ----
+
+def _report_complexity(cc, filepath, collector):
+    """圈复杂度检测 + 报告（共享逻辑，消除 3 dup）"""
+    if cc > _core.THRESHOLDS["cyclomatic_complexity_block"]:
+        collector.add("block", "complexity_regex", filepath, 0,
+                      f"圈复杂度(近似) {cc} > {_core.THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
+                      "拆分为多个小函数", confidence=80)
+    elif cc > _core.THRESHOLDS["cyclomatic_complexity_warn"]:
+        collector.add("warn", "complexity_regex", filepath, 0,
+                      f"圈复杂度(近似) {cc} > {_core.THRESHOLDS['cyclomatic_complexity_warn']}(警告)",
+                      "考虑拆分", confidence=80)
+
+
+def _report_nesting(depth, filepath, collector):
+    """嵌套深度检测 + 报告（共享逻辑，消除 3 dup）"""
+    if depth > _core.THRESHOLDS["max_nesting_block"]:
+        collector.add("block", "nesting_regex", filepath, 0,
+                      f"嵌套深度(近似) {depth} > {_core.THRESHOLDS['max_nesting_block']}(阻塞)",
+                      "使用 early return 减少嵌套", confidence=80)
+    elif depth > _core.THRESHOLDS["max_nesting_warn"]:
+        collector.add("warn", "nesting_regex", filepath, 0,
+                      f"嵌套深度(近似) {depth} > {_core.THRESHOLDS['max_nesting_warn']}(警告)",
+                      "考虑使用 early return", confidence=80)
+
+
+def _report_params(params, filepath, collector):
+    """参数数量检测 + 报告（共享逻辑，消除 3 dup）"""
+    for (func_name, line), count in params.items():
+        if count > _core.THRESHOLDS["max_function_params_block"]:
+            collector.add("block", "params_regex", filepath, line,
+                          f"函数 '{func_name}' 参数 {count} > {_core.THRESHOLDS['max_function_params_block']}(阻塞)",
+                          "封装为参数对象", confidence=80)
+        elif count > _core.THRESHOLDS["max_function_params_warn"]:
+            collector.add("warn", "params_regex", filepath, line,
+                          f"函数 '{func_name}' 参数 {count} > {_core.THRESHOLDS['max_function_params_warn']}(警告)",
+                          "考虑使用参数对象", confidence=80)
+
+
 def _check_regex_based_file(filepath, collector, ext, *, check_nesting=True, check_methods=False):
     """通用正则检测驱动器 — 服务于 JS/TS/Java/Go/C# 的共享检测逻辑"""
     file_type = _core.FileClassifier.classify(filepath)
@@ -196,42 +264,13 @@ def _check_regex_based_file(filepath, collector, ext, *, check_nesting=True, che
     
     stripped = _core.strip_comments_and_strings(content, ext)
     
-    # 圈复杂度
-    cc = _compute_cc_regex(content, ext, stripped=stripped)
-    if cc > _core.THRESHOLDS["cyclomatic_complexity_block"]:
-        collector.add("block", "complexity_regex", filepath, 0,
-                      f"圈复杂度(近似) {cc} > {_core.THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
-                      "拆分为多个小函数", confidence=80)
-    elif cc > _core.THRESHOLDS["cyclomatic_complexity_warn"]:
-        collector.add("warn", "complexity_regex", filepath, 0,
-                      f"圈复杂度(近似) {cc} > {_core.THRESHOLDS['cyclomatic_complexity_warn']}(警告)",
-                      "考虑拆分", confidence=80)
+    _report_complexity(_compute_cc_regex(content, ext, stripped=stripped), filepath, collector)
     
-    # 嵌套深度
     if check_nesting:
-        depth = _compute_nesting_regex(content, ext, stripped=stripped)
-        if depth > _core.THRESHOLDS["max_nesting_block"]:
-            collector.add("block", "nesting_regex", filepath, 0,
-                          f"嵌套深度(近似) {depth} > {_core.THRESHOLDS['max_nesting_block']}(阻塞)",
-                          "使用 early return 减少嵌套", confidence=80)
-        elif depth > _core.THRESHOLDS["max_nesting_warn"]:
-            collector.add("warn", "nesting_regex", filepath, 0,
-                          f"嵌套深度(近似) {depth} > {_core.THRESHOLDS['max_nesting_warn']}(警告)",
-                          "考虑使用 early return", confidence=80)
+        _report_nesting(_compute_nesting_regex(content, ext, stripped=stripped), filepath, collector)
     
-    # 参数数量
-    params = _count_params_regex(content, ext, stripped=stripped)
-    for (func_name, line), count in params.items():
-        if count > _core.THRESHOLDS["max_function_params_block"]:
-            collector.add("block", "params_regex", filepath, line,
-                          f"函数 '{func_name}' 参数 {count} > {_core.THRESHOLDS['max_function_params_block']}(阻塞)",
-                          "封装为参数对象", confidence=80)
-        elif count > _core.THRESHOLDS["max_function_params_warn"]:
-            collector.add("warn", "params_regex", filepath, line,
-                          f"函数 '{func_name}' 参数 {count} > {_core.THRESHOLDS['max_function_params_warn']}(警告)",
-                          "考虑使用参数对象", confidence=80)
+    _report_params(_count_params_regex(content, ext, stripped=stripped), filepath, collector)
     
-    # 类方法数
     if check_methods:
         method_count = _count_java_methods(content, stripped=stripped)
         if method_count > _core.THRESHOLDS["max_class_methods_warn"]:
@@ -281,7 +320,7 @@ def check_csharp_file(filepath, collector):
 
 
 def check_generic_file(filepath, collector, ext):
-    """对非主流语言执行通用质量检测"""
+    """对非主流语言执行通用质量检测 — v2.0.10: 共享 _report_* 消除 6 dup"""
     file_type = _core.FileClassifier.classify(filepath)
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
@@ -294,31 +333,13 @@ def check_generic_file(filepath, collector, ext):
     _check_file_size(loc, filepath, collector)
     _check_security_wrapper(content, filepath, collector, file_type)
     
-    if ext in LANG_CC_PATTERNS or ext in LANG_PARAM_PATTERNS:
-        stripped = _core.strip_comments_and_strings(content, ext)
+    stripped = _core.strip_comments_and_strings(content, ext) if ext in LANG_CC_PATTERNS or ext in LANG_PARAM_PATTERNS else content
     
     if ext in LANG_CC_PATTERNS:
-        cc = _compute_cc_regex(content, ext, stripped=stripped)
-        if cc > _core.THRESHOLDS["cyclomatic_complexity_block"]:
-            collector.add("block", "complexity_regex", filepath, 0,
-                          f"圈复杂度(近似) {cc} > {_core.THRESHOLDS['cyclomatic_complexity_block']}(阻塞)",
-                          "拆分为多个小函数", confidence=80)
-        elif cc > _core.THRESHOLDS["cyclomatic_complexity_warn"]:
-            collector.add("warn", "complexity_regex", filepath, 0,
-                          f"圈复杂度(近似) {cc} > {_core.THRESHOLDS['cyclomatic_complexity_warn']}(警告)",
-                          "考虑拆分", confidence=80)
+        _report_complexity(_compute_cc_regex(content, ext, stripped=stripped), filepath, collector)
     
     if ext in LANG_PARAM_PATTERNS:
-        params = _count_params_regex(content, ext, stripped=stripped)
-        for (func_name, line), count in params.items():
-            if count > _core.THRESHOLDS["max_function_params_block"]:
-                collector.add("block", "params_regex", filepath, line,
-                              f"函数 '{func_name}' 参数 {count} > {_core.THRESHOLDS['max_function_params_block']}(阻塞)",
-                              "封装为参数对象", confidence=80)
-            elif count > _core.THRESHOLDS["max_function_params_warn"]:
-                collector.add("warn", "params_regex", filepath, line,
-                              f"函数 '{func_name}' 参数 {count} > {_core.THRESHOLDS['max_function_params_warn']}(警告)",
-                              "考虑使用参数对象", confidence=80)
+        _report_params(_count_params_regex(content, ext, stripped=stripped), filepath, collector)
     
     if ext in (".py", ".js", ".ts", ".java", ".cs", ".go", ".rs", ".cpp", ".c", ".h"):
         _check_empty_except_generic_wrapper(content, filepath, collector, ext)

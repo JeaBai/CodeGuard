@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CodeGuard Quality Check — 薄编排器入口 (v2.0.9)
+CodeGuard Quality Check — 薄编排器入口 (v2.0.10)
 =================================================
 模块化重构：编排 6 个子模块 → 全量/增量/金级门禁检测。
 
@@ -129,7 +129,7 @@ _FILE_CHECKERS = {
 # ============================================================
 
 def run_quality_check(root_path, mode="personal"):
-    """执行完整质量检查（v2.0.9: 模块化编排 + 派发表消除 if/elif 链）"""
+    """执行完整质量检查（v2.0.10: 模块化编排 + 派发表消除 if/elif 链）"""
     collector = IssueCollector()
     
     is_diff = mode == "diff"

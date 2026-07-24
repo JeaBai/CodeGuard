@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CodeGuard MCP Server — JSON-RPC 2.0 over stdio (v2.0.9)
+CodeGuard MCP Server — JSON-RPC 2.0 over stdio (v2.0.10)
 ========================================================
 跨平台通用，支持 Claude Code、Cursor、VS Code、CodeBuddy 等所有 MCP 客户端。
 
@@ -34,7 +34,7 @@ import quality_check
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "CodeGuard"
-SERVER_VERSION = "2.0.9"
+SERVER_VERSION = "2.0.10"
 
 # ============================================================
 # JSON-RPC 2.0 消息处理

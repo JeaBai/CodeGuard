@@ -257,47 +257,77 @@ class IssueCollector:
 # 文件类型分类器
 # ============================================================
 
+# ---- 文件分类子函数们（将 classify 的 if/elif 链拆为独立谓词） ----
+
+def _classify_is_doc(path_lower, name, ext):
+    if ext == ".md" or "documentation" in path_lower:
+        return True
+    return False
+
+def _classify_is_test(path_lower, name, ext):
+    _test_dirs = ["/test/", "/tests/", "/spec/", "/__tests__/",
+                   "/testing/", "/fixtures/", "/mocks/", "/stubs/"]
+    if any(p in path_lower for p in _test_dirs):
+        return True
+    _test_names = ("test_", "_test.py", ".test.js", ".spec.js",
+                   ".test.ts", ".spec.ts", "Test.java", "Tests.java",
+                   "_test.go", "_test.rs")
+    if name.startswith("test_"):
+        return True
+    if any(name.endswith(suffix) for suffix in _test_names[1:]):
+        return True
+    return False
+
+def _classify_is_generated(path_lower, name, ext):
+    _gen_kw = ["generated", "_pb2", "_grpc", ".pb.", "auto_generated", "_generated"]
+    if any(kw in name for kw in _gen_kw):
+        return True
+    _gen_dirs = ["/generated/", "/gen/", "/out/", "/dist/", "/build/",
+                  "/node_modules/", "/vendor/", "/third_party/"]
+    if any(kw in path_lower for kw in _gen_dirs):
+        return True
+    return False
+
+def _classify_is_config(path_lower, name, ext):
+    if ext in (".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env", ".xml"):
+        if "package.json" in name or "tsconfig" in name or "docker" in name:
+            return True
+    return False
+
+def _classify_is_migration(path_lower, name, ext):
+    _mig_dirs = ["/migration/", "/migrations/", "/migrate/", "/schema/"]
+    if any(kw in path_lower for kw in _mig_dirs):
+        return True
+    if ext == ".sql":
+        return True
+    return False
+
+# 规则 dispatch 表：(谓词函数, 返回值) 按优先级排列
+_CLASSIFY_RULES = [
+    (_classify_is_doc, "doc"),
+    (_classify_is_test, "test"),
+    (_classify_is_generated, "generated"),
+    (_classify_is_config, "config"),
+    (_classify_is_migration, "migration"),
+]
+
+
 class FileClassifier:
-    """文件类型分类器"""
+    """文件类型分类器（v2.0.10: CC=29→5，if/elif 链替换为规则 dispatch 表）"""
     
     def __init__(self):
         pass
     
     @staticmethod
     def classify(file_path):
-        """根据文件路径和内容特征分类"""
+        """根据文件路径和内容特征分类 — 规则 dispatch 表驱动"""
         path_lower = file_path.lower()
         name = os.path.basename(path_lower)
         ext = os.path.splitext(path_lower)[1].lower()
         
-        if ext == ".md" or "documentation" in path_lower:
-            return "doc"
-        
-        if any(p in path_lower for p in ["/test/", "/tests/", "/spec/", "/__tests__/",
-                                          "/testing/", "/fixtures/", "/mocks/", "/stubs/"]):
-            return "test"
-        if name.startswith("test_") or name.endswith("_test.py") or \
-           name.endswith(".test.js") or name.endswith(".spec.js") or \
-           name.endswith(".test.ts") or name.endswith(".spec.ts") or \
-           name.endswith("Test.java") or name.endswith("Tests.java") or \
-           name.endswith("_test.go") or name.endswith("_test.rs"):
-            return "test"
-        
-        if any(kw in name for kw in ["generated", "_pb2", "_grpc", ".pb.", "auto_generated", "_generated"]):
-            return "generated"
-        if any(kw in path_lower for kw in ["/generated/", "/gen/", "/out/", "/dist/", "/build/",
-                                            "/node_modules/", "/vendor/", "/third_party/"]):
-            return "generated"
-        
-        if ext in (".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env", ".xml"):
-            if "package.json" in name or "tsconfig" in name or "docker" in name:
-                return "config"
-        
-        if any(kw in path_lower for kw in ["/migration/", "/migrations/", "/migrate/", "/schema/"]):
-            return "migration"
-        if ext == ".sql":
-            return "migration"
-        
+        for predicate, label in _CLASSIFY_RULES:
+            if predicate(path_lower, name, ext):
+                return label
         return "source"
     
     @staticmethod
