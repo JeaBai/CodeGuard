@@ -1422,8 +1422,22 @@ def get_changed_files(root_path):
 
 
 def load_custom_quality_rules(root_path):
-    """加载 .code-guardian/rules.json 中的自定义质量规则（v2.0.3: 与 constraint_injector 逻辑统一）"""
+    """加载 .code-guardian/rules.json 中的自定义质量规则 + 阈值覆盖（v2.0.7: 金级门禁支持）
+    
+    返回: (rules: list, thresholds: dict | None)
+    
+    rules.json 格式:
+    {
+      "rules": [...],           // 自定义正则规则列表
+      "thresholds": {           // 可选：覆盖默认质量阈值（金/银/铜级门禁）
+        "cyclomatic_complexity_block": 10,
+        "max_nesting_block": 4,
+        ...
+      }
+    }
+    """
     custom_rules = []
+    custom_thresholds = None
     config_path = Path(root_path) / ".code-guardian" / "rules.json"
     
     try:
@@ -1431,6 +1445,15 @@ def load_custom_quality_rules(root_path):
             data = json.load(f)
         if "rules" in data:
             custom_rules = data["rules"]
+        if "thresholds" in data and isinstance(data["thresholds"], dict):
+            custom_thresholds = data["thresholds"]
+            # 数值完整性校验
+            valid_keys = set(THRESHOLDS.keys())
+            unknown = {k for k in custom_thresholds if k not in valid_keys and not k.startswith('_')}
+            if unknown:
+                _log(f"[CodeGuard] ⚠️ 未知阈值键将被忽略: {', '.join(sorted(unknown))}")
+            custom_thresholds = {k: v for k, v in custom_thresholds.items() 
+                                if k in valid_keys and isinstance(v, (int, float)) and v > 0}
     except FileNotFoundError:
         pass
     except json.JSONDecodeError as e:
@@ -1438,7 +1461,7 @@ def load_custom_quality_rules(root_path):
     except Exception as e:
         _log(f"[CodeGuard] 加载自定义规则异常: {config_path} - {e}")
     
-    return custom_rules
+    return custom_rules, custom_thresholds
 
 
 def check_custom_rules(source_files, custom_rules, collector):
@@ -1577,8 +1600,13 @@ def run_quality_check(root_path, mode="personal"):
         collector.add("info", "no_files", root_path, 0, "未发现源码文件")
         return collector
     
-    # 加载自定义规则
-    custom_rules = load_custom_quality_rules(root_path)
+    # 加载自定义规则 + 阈值覆盖（v2.0.7: 金级门禁支持）
+    custom_rules, custom_thresholds = load_custom_quality_rules(root_path)
+    if custom_thresholds:
+        overridden = {k: v for k, v in custom_thresholds.items() if THRESHOLDS.get(k) != v}
+        THRESHOLDS.update(custom_thresholds)
+        if overridden:
+            _log(f"[CodeGuard] 🔧 阈值覆盖 {len(overridden)} 项: {', '.join(f'{k}={v}' for k, v in sorted(overridden.items()))}")
     if custom_rules:
         _log(f"[CodeGuard] 加载 {len(custom_rules)} 条自定义规则")
     

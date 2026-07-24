@@ -57,7 +57,7 @@ import constraint_injector
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "CodeGuard"
-SERVER_VERSION = "2.0.5"
+SERVER_VERSION = "2.0.7"
 
 # ============================================================
 # JSON-RPC 2.0 消息处理

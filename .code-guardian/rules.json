@@ -1,0 +1,189 @@
+{
+  "_comment": "CodeGuard 金级（核心系统）质量门禁预设 — 腾讯金级标准",
+  "_version": "2.0.7",
+  "_usage": "将此文件放置于项目根目录的 .code-guardian/ 文件夹即可自动生效",
+
+  "thresholds": {
+    "_comment": "金级阈值：覆盖 CodeGuard 默认值，对齐大厂核心系统标准",
+    "cyclomatic_complexity_warn": 8,
+    "cyclomatic_complexity_block": 10,
+    "max_function_params_warn": 4,
+    "max_function_params_block": 6,
+    "max_nesting_warn": 3,
+    "max_nesting_block": 4,
+    "max_class_lines_warn": 200,
+    "max_class_lines_block": 400,
+    "max_class_methods_warn": 10,
+    "max_interface_methods_warn": 8,
+    "duplicate_lines_warn": 4,
+    "duplicate_lines_block": 6,
+    "cross_file_duplicate_block": 15,
+    "max_file_lines_warn": 200,
+    "max_file_lines_block": 400
+  },
+
+  "rules": [
+    {
+      "id": "GOLD_NO_BARE_EXCEPT",
+      "description": "禁止裸 except（未指定异常类型的捕获）",
+      "severity": "block",
+      "target": "python",
+      "pattern": "^\\s*except\\s*:",
+      "message": "金级禁则：禁止使用裸 except:，必须指定具体异常类型",
+      "suggestion": "使用 except SpecificError as e: 捕获具体异常，避免吞掉 KeyboardInterrupt/SystemExit"
+    },
+    {
+      "id": "GOLD_NO_MUTABLE_DEFAULT",
+      "description": "禁止可变类型作为函数参数默认值",
+      "severity": "block",
+      "target": "python",
+      "pattern": "def \\w+\\([^)]*=\\s*(\\[\\]|\\{\\}|set\\(\\)|dict\\(\\)|list\\(\\))",
+      "message": "金级禁则：禁止使用可变类型作为函数参数默认值（[]/{} /set()），每次调用共享同一对象",
+      "suggestion": "使用 None 作默认值，函数体内部初始化：if x is None: x = []"
+    },
+    {
+      "id": "GOLD_NO_WILDCARD_IMPORT",
+      "description": "禁止通配符导入（命名空间污染）",
+      "severity": "block",
+      "target": "python",
+      "pattern": "^from \\S+ import \\*$",
+      "message": "金级禁则：禁止使用 from module import *，污染命名空间且IDE无法追踪",
+      "suggestion": "显式导入需要的名称：from module import Foo, Bar"
+    },
+    {
+      "id": "GOLD_NO_BROAD_EXCEPTION",
+      "description": "禁止直接捕获 Exception/BaseException",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "except\\s+(Exception|BaseException)",
+      "message": "金级建议：捕获 Exception/BaseException 范围过宽，优先捕获具体异常类型",
+      "suggestion": "限制为具体异常类型，除非在错误边界/重试逻辑中确有必要"
+    },
+    {
+      "id": "GOLD_NO_PRINT_PRODUCTION",
+      "description": "生产代码禁止使用 print() 调试输出",
+      "severity": "block",
+      "target": "python",
+      "pattern": "\\bprint\\s*\\(",
+      "message": "金级禁则：禁止在生产代码中使用 print() 输出",
+      "suggestion": "使用 logging.getLogger(__name__).info/debug/error() 结构化日志"
+    },
+    {
+      "id": "GOLD_NO_CONSOLE_LOG",
+      "description": "前端生产代码禁止 console.log",
+      "severity": "block",
+      "target": "javascript",
+      "pattern": "console\\.(log|warn|error|debug|info)\\s*\\(",
+      "message": "金级禁则：禁止保留 console 调试输出",
+      "suggestion": "使用结构化日志库（如 winston/pino），并在构建时剥离 console 调用"
+    },
+    {
+      "id": "GOLD_NO_ANY_TYPE",
+      "description": "TypeScript 禁止使用 any 类型逃逸",
+      "severity": "block",
+      "target": "javascript",
+      "pattern": ":\\s*any\\b",
+      "message": "金级禁则：禁止使用 any 类型，失去 TypeScript 类型安全保障",
+      "suggestion": "替换为具体类型、泛型 T、unknown + 类型守卫，或 Record<string, unknown>"
+    },
+    {
+      "id": "GOLD_NO_SYNC_IO",
+      "description": "Node.js 禁止同步 I/O 阻塞事件循环",
+      "severity": "block",
+      "target": "javascript",
+      "pattern": "\\b(readFileSync|writeFileSync|existsSync|mkdirSync|rmdirSync|unlinkSync)\\s*\\(",
+      "message": "金级禁则：禁止同步 I/O 操作阻塞事件循环",
+      "suggestion": "使用 fs/promises 异步版本：await fs.readFile()，或在启动阶段用 require('fs/promises')"
+    },
+    {
+      "id": "GOLD_USE_STRICT_EQUAL",
+      "description": "JavaScript 使用严格等于避免类型转换",
+      "severity": "warn",
+      "target": "javascript",
+      "pattern": "(?<![!=!])(?<![=])(==|!=)(?!=)",
+      "message": "金级建议：使用 === / !== 严格等于，避免隐式类型转换导致逻辑错误",
+      "suggestion": "=== 替代 ==，!== 替代 !="
+    },
+    {
+      "id": "GOLD_NO_MAGIC_NUMBER",
+      "description": "禁止未命名的魔法数字",
+      "severity": "warn",
+      "target": "all",
+      "pattern": "(?<![\\w.#$])(?<!['\"\\w])([3-9]\\d{2,}|\\d{4,})(?![\\w])",
+      "message": "金级建议：疑似魔法数字，降低代码可读性和可维护性",
+      "suggestion": "使用命名常量替代：const MAX_RETRY_COUNT = 5"
+    },
+    {
+      "id": "GOLD_NO_TODO_WITHOUT_TICKET",
+      "description": "TODO 必须关联工单编号",
+      "severity": "warn",
+      "target": "all",
+      "pattern": "\\bTODO\\s*[(:]?\\s*$",
+      "message": "金级建议：TODO 注释必须关联工单或需求编号（格式: TODO(#12345) 或 TODO(PROJ-789)）",
+      "suggestion": "改为 TODO(#ISSUE_ID): 说明 或 FIXME(PROJ-123): 说明，确保可追踪"
+    },
+    {
+      "id": "GOLD_NO_HARDCODED_URL",
+      "description": "禁止硬编码外部 URL/IP 地址",
+      "severity": "block",
+      "target": "all",
+      "pattern": "https?://(?!localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0)[^\\s\"'`]+",
+      "message": "金级禁则：禁止硬编码外部 URL，环境变更时易导致生产事故",
+      "suggestion": "通过环境变量或配置中心注入：os.getenv('API_BASE_URL')"
+    },
+    {
+      "id": "GOLD_NO_SQL_CONCAT",
+      "description": "禁止 SQL 字符串拼接（含 f-string）",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\\s.*(?:f['\"]%|\\+|format\\()",
+      "message": "金级禁则：SQL 字符串拼接导致注入漏洞",
+      "suggestion": "使用参数化查询：cursor.execute('SELECT * FROM t WHERE id = ?', (id,))"
+    },
+    {
+      "id": "GOLD_NO_OS_SYSTEM",
+      "description": "禁止使用 os.system/popen 执行外部命令",
+      "severity": "block",
+      "target": "python",
+      "pattern": "\\b(os\\.(system|popen)|subprocess\\.(call|run|Popen)\\s*\\(\\s*['\"])",
+      "message": "金级禁则：外部命令执行存在命令注入风险",
+      "suggestion": "使用 subprocess.run([...], shell=False) 传参数组 + shlex.quote()，确保参数不拼接"
+    },
+    {
+      "id": "GOLD_NO_EMPTY_EXCEPT",
+      "description": "禁止空的异常处理块",
+      "severity": "block",
+      "target": "python",
+      "pattern": "except[^:]*:\\s*pass\\s*$",
+      "message": "金级禁则：空 except 块吞掉所有异常信息，排查故障困难",
+      "suggestion": "最低限度添加 logger.exception('描述') 记录异常上下文，或 raise 重新抛出"
+    },
+    {
+      "id": "GOLD_NO_EVAL",
+      "description": "禁止使用 eval/exec/Function 动态执行",
+      "severity": "block",
+      "target": "all",
+      "pattern": "\\b(eval|exec|Function)\\s*\\(",
+      "message": "金级禁则：动态代码执行存在代码注入风险",
+      "suggestion": "使用安全的替代方案：JSON.parse() 替代 eval()；策略模式替代动态函数构造"
+    },
+    {
+      "id": "GOLD_USE_DATACLASS",
+      "description": "Python 数据载体类建议使用 dataclass",
+      "severity": "info",
+      "target": "python",
+      "pattern": "class \\w+:\\s*\\n\\s+def __init__\\(self,\\s*(?!.*super)",
+      "message": "金级建议：纯数据初始化类可考虑 @dataclass 减少样板代码",
+      "suggestion": "使用 @dataclass + 类型注解：from dataclasses import dataclass"
+    },
+    {
+      "id": "GOLD_NO_GLOBAL_STATE",
+      "description": "禁止模块级可变全局状态",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "^(?!def|class|import|from|#|if __name__)(\\w+)\\s*=\\s*",
+      "message": "金级建议：模块级赋值可能引入隐式全局状态，影响可测试性",
+      "suggestion": "将全局状态封装为类/单例，或通过依赖注入传递"
+    }
+  ]
+}
