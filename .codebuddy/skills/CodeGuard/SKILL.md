@@ -27,6 +27,8 @@ agent_created: true
 | 2 | `<项目根>/rules.json` |
 | 3 | `<项目根>/.code-guardian.json` |
 
+**预设从哪来**：技能目录内的 `templates/code-guardian-preset/` 是与内置金级 36 条规则同步的配置快照（`rules.json` + `rules-silver.json` + `config.json` + `profiles/`）。项目根没有 `.code-guardian/` 时，把它复制成 `<项目根>/.code-guardian/` 即可启用完整金级门控；**不复制则只有内置金级阈值生效，那 36 条金级自定义规则不参与检测**（实测同一份代码：无配置 4 项 / 有配置 10 项）。
+
 ### 可设定字段（存在即生效）
 
 | 字段 | 取值 | 生效行为 |

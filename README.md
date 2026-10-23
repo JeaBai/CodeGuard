@@ -180,6 +180,14 @@ pnpm add https://github.com/JeaBai/CodeGuard
 
 完整使用规则（定位顺序、字段表、三级阈值基准、叠加语义、边界）见 [`SKILL.md`](.codebuddy/skills/CodeGuard/SKILL.md) 的「`.code-guardian/rules.json` 金级门控使用规则」专节。
 
+**现成预设**：`templates/code-guardian-preset/` 是与内置金级 36 条规则同步的配置快照。项目根没有 `.code-guardian/` 时，把它复制成 `<项目根>/.code-guardian/`：
+
+```bash
+cp -r .codebuddy/skills/CodeGuard/templates/code-guardian-preset <你的项目>/.code-guardian
+```
+
+不复制时**只有内置金级阈值生效**，36 条金级自定义规则不参与检测（实测同一份代码：无配置 4 项 / 有配置 10 项）。DSH 组合包安装后，预设位于技能目录 `~/.dsh/skills/CodeGuard/templates/code-guardian-preset/`（或包内 `.codebuddy/skills/CodeGuard/templates/`）。
+
 ## 🧪 测试
 
 零依赖内置 runner，无需 pytest：

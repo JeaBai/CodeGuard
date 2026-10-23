@@ -1,0 +1,330 @@
+{
+  "_comment": "CodeGuard 嵌入式金级（安全关键固件）质量门禁预设 — 对齐 MISRA C:2012 + 嵌入式最佳实践 + ISO 26262 ASIL 参考",
+  "_version": "3.0.0",
+  "_level": "gold",
+  "_industry": "embedded",
+  "_c_dialect": "auto",
+  "_c_dialect_description": "C/C++ 方言识别：auto=自动检测（RTOS头/ISR/寄存器宏/链接脚本信号）；generic=强制通用 C/C++；embedded=强制嵌入式 C。embedded 方言启用 MISRA C:2012 子集 + ISR 安全 + volatile 正确性 + 栈深度检测。",
+  "_description": "嵌入式金级门禁适用于安全关键固件、RTOS 应用、裸机系统、飞控/车规/医疗嵌入式软件。阈值对齐 MISRA C:2012 + 大疆车载/研华嵌入式实践。移除 Web/云专用规则（API/DB/健康检查/幂等/并发），新增 MISRA-C + ISR 安全 + 工具链感知规则。",
+  "_usage": "通过 config.json 的 industry=embedded 自动选择此规则集，或手动复制为 rules.json。",
+  "_detector_note": "本规则集与 quality_embedded.py 检测器协同工作：regex 规则由门禁引擎执行，_engine_check 规则由 quality_embedded.py / quality_c_dialect.py 检测器执行。两者结果合并计入门禁判定。",
+
+  "ignorePaths": {
+    "_comment": "排除路径：第三方库/生成文件/构建产物",
+    "patterns": [
+      "**/_shared/**",
+      "**/vendor/**",
+      "**/third_party/**",
+      "**/CMSIS/**",
+      "**/Hal/**",
+      "**/Drivers/**",
+      "**/*.min.js",
+      "**/node_modules/**",
+      "**/__pycache__/**",
+      "**/.git/**",
+      "**/build/**",
+      "**/Debug/**",
+      "**/Release/**",
+      "**/*.o",
+      "**/*.d",
+      "**/*.map",
+      "**/*.hex",
+      "**/*.bin",
+      "**/*.elf"
+    ]
+  },
+
+  "thresholds": {
+    "_comment": "嵌入式金级阈值：CC放宽至15（状态机天然偏高），嵌套收紧至3（中断安全），文件行数放宽至500（驱动文件），重复行收紧至5（Flash有限）",
+    "cyclomatic_complexity_warn": 12,
+    "cyclomatic_complexity_block": 15,
+    "max_function_params_warn": 5,
+    "max_function_params_block": 7,
+    "max_nesting_warn": 2,
+    "max_nesting_block": 3,
+    "max_class_lines_warn": 300,
+    "max_class_lines_block": 500,
+    "max_class_methods_warn": 15,
+    "max_interface_methods_warn": 8,
+    "duplicate_lines_warn": 3,
+    "duplicate_lines_block": 5,
+    "cross_file_duplicate_block": 12,
+    "max_file_lines_warn": 300,
+    "max_file_lines_block": 500,
+    "test_coverage_min_pct": 80,
+    "isr_max_lines": 80,
+    "stack_array_max_bytes": 256
+  },
+
+  "rules": [
+    {
+      "id": "EMB_GOLD_NO_EVAL",
+      "description": "禁止 eval/exec/Function 动态执行（嵌入式环境无沙箱，代码注入风险更高）",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?<!['\"\\w])\\b(eval|exec|Function)\\s*\\(",
+      "message": "嵌入式金级禁则：动态代码执行在嵌入式环境中无法隔离，存在直接内存破坏风险",
+      "suggestion": "使用函数指针表/状态机替代动态分发；JSON.parse() 替代表达式求值",
+      "case_sensitive": true
+    },
+    {
+      "id": "EMB_GOLD_NO_HARDCODED_URL",
+      "description": "禁止硬编码外部 URL/IP 地址（OTA/远程更新场景风险）",
+      "severity": "block",
+      "target": "all",
+      "pattern": "https?://(?!localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0)[^\\s\"'`]+",
+      "message": "嵌入式金级禁则：硬编码 URL/IP 在 OTA 更新时可能导致设备变砖",
+      "suggestion": "通过配置分区/OTA 配置文件注入服务器地址",
+      "expected_precision": 0.80
+    },
+    {
+      "id": "EMB_GOLD_NO_MAGIC_NUMBER",
+      "description": "禁止未命名的魔法数字（寄存器地址/掩码除外）",
+      "severity": "info",
+      "target": "c|cpp|rust",
+      "pattern": "(?<![\\w.#$'\"=/])([3-9]\\d{2,}|\\d{5,})(?!\\s*(?:年|月|日|px|em|rem|%|[A-Z_]|0x))(?![\\w])",
+      "message": "嵌入式金级提醒：疑似魔法数字，应使用 #define 常量或 enum",
+      "suggestion": "使用 #define MAX_BUFFER_SIZE 256 或 enum { MAX_BUFFER_SIZE = 256 }",
+      "expected_precision": 0.90
+    },
+    {
+      "id": "EMB_GOLD_NO_TODO_WITHOUT_TICKET",
+      "description": "源代码 TO-DO 注释必须关联工单编号",
+      "severity": "warn",
+      "target": "c|cpp|rust",
+      "pattern": "\\bTODO\\b(?!\\s*[\\(:]\\s*[#A-Za-z]+[-_]?\\d+)",
+      "message": "嵌入式金级建议：TODO 注释必须关联工单或需求编号",
+      "suggestion": "改为 TODO(#ISSUE_ID): 说明 或 FIXME(PROJ-123): 说明",
+      "expected_precision": 0.85
+    },
+    {
+      "id": "EMB_GOLD_SENSITIVE_DATA",
+      "description": "禁止明文存储敏感数据（密钥/Token/证书）",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?im)(?:password|passwd|secret|api_key|token|private_key|certificate)\\s*=\\s*[\"'][^\"']{4,}[\"']\\s*(?:#|$|\\n)(?!.*(?:encrypt|hash|aes|kms|vault|secure_store))",
+      "message": "嵌入式金级禁则：敏感字段明文赋值。设备被物理获取后密钥直接泄露。",
+      "suggestion": "使用安全存储区（OTP/Flash保护区/TEE）；传输层 TLS 1.2+；落盘 AES-256-GCM",
+      "expected_precision": 0.70
+    },
+    {
+      "id": "EMB_GOLD_LOG_CREDENTIAL_LEAK",
+      "description": "禁止在日志/printf 中输出密码/Token/密钥",
+      "severity": "block",
+      "target": "c|cpp|rust",
+      "pattern": "(?im)(?:printf|fprintf|sprintf|LOG|log_|print|UART_Send)\\s*\\(.*(?:password|passwd|secret|token|api_key|private_key|credential)",
+      "message": "嵌入式金级禁则：日志中包含敏感字段名，UART/串口日志可被物理嗅探",
+      "suggestion": "日志脱敏：只输出操作结果，不输出凭据值",
+      "expected_precision": 0.80
+    },
+    {
+      "id": "EMB_GOLD_NO_DYNAMIC_ALLOC",
+      "description": "禁止动态内存分配 malloc/free/calloc/realloc/new/delete（MISRA C:2012 Rule 21.3）",
+      "severity": "block",
+      "target": "c|cpp",
+      "pattern": "\\b(?:p?malloc|calloc|realloc)\\s*\\(|\\bnew\\b\\s+[A-Za-z_]|\\bdelete\\b\\s*(?:\\[\\s*\\]\\s*)?[\\w.]+",
+      "message": "嵌入式金级禁则：动态内存分配导致堆碎片/内存泄漏/不确定延迟，安全关键路径硬禁（MISRA 21.3）",
+      "suggestion": "使用静态内存池/栈分配/对象池；如需动态分配仅在启动阶段执行且不再释放",
+      "expected_precision": 0.95
+    },
+    {
+      "id": "EMB_GOLD_GOTO_LIMIT",
+      "description": "限制 goto 使用（MISRA C:2012 Rule 15.2: goto 仅限向前跳转单一出口）",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": "\\bgoto\\s+\\w+\\s*;",
+      "message": "嵌入式金级建议：goto 使用受 MISRA 15.2 限制，仅允许向前跳转到函数末尾的单一清理出口",
+      "suggestion": "使用结构化控制流替代 goto；如必须使用 goto，确保仅向前跳转到 cleanup 标签",
+      "expected_precision": 0.90
+    },
+    {
+      "id": "EMB_GOLD_SWITCH_NO_DEFAULT",
+      "description": "switch 语句必须有 default 分支（MISRA C:2012 Rule 16.7）",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "switch_default",
+      "message": "嵌入式金级建议：switch 语句缺少 default 分支（MISRA 16.7）。未处理的枚举值可能导致未定义行为。",
+      "suggestion": "添加 default: 分支处理意外值，至少包含 assert 或错误日志",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_GOLD_VOLATILE_REGISTER",
+      "description": "内存映射寄存器指针必须使用 volatile 限定（MISRA C:2012 Rule 8.9）",
+      "severity": "block",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "volatile_register",
+      "message": "嵌入式金级禁则：MMIO 寄存器指针未使用 volatile，编译器优化可能导致寄存器访问被消除",
+      "suggestion": "使用 volatile 限定: #define REG ((volatile uint32_t*)0x40000000)",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_GOLD_STACK_ARRAY_MAX",
+      "description": "局部数组不得超过 256 字节（嵌入式栈空间有限）",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "stack_depth",
+      "message": "嵌入式金级建议：局部数组过大可能导致栈溢出。嵌入式系统栈通常仅 1-4KB。",
+      "suggestion": "使用 static 局部变量/全局缓冲区/内存池；如必须使用局部数组，确保函数不在 ISR/递归路径上",
+      "_note": "此规则由 quality_embedded.py 检测器执行，阈值由 stack_array_max_bytes 控制"
+    },
+    {
+      "id": "EMB_GOLD_ISR_NO_BLOCKING",
+      "description": "ISR 内禁止调用阻塞函数 printf/sleep/delay/malloc（嵌入式硬约束）",
+      "severity": "block",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "isr_blocking",
+      "message": "嵌入式金级禁则：ISR 内调用阻塞函数导致中断响应延迟/看门狗超时/系统死锁",
+      "suggestion": "ISR 内仅做标志位设置/环形缓冲区写入，阻塞操作移到主循环/任务中处理",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_GOLD_ISR_MAX_LINES",
+      "description": "ISR 函数体不得超过 80 行",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "isr_length",
+      "message": "嵌入式金级建议：ISR 过长增加中断延迟，影响实时性",
+      "suggestion": "将复杂处理移到 DRT/任务中，ISR 仅做最小必要的标志/缓冲操作",
+      "_note": "此规则由 quality_embedded.py 检测器执行，阈值由 isr_max_lines 控制"
+    },
+    {
+      "id": "EMB_GOLD_NO_FLOAT_ISR",
+      "description": "ISR 内禁止使用浮点运算（FPU 上下文保存开销大）",
+      "severity": "block",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "isr_float",
+      "message": "嵌入式金级禁则：ISR 内浮点运算需要保存/恢复 FPU 上下文，增加中断延迟 10-50 倍",
+      "suggestion": "将浮点运算移到主循环/任务中；ISR 内使用定点运算替代",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_GOLD_VOLATILE_ISR_FLAG",
+      "description": "ISR 与主循环共享的标志变量必须使用 volatile 限定",
+      "severity": "block",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "volatile_isr_flag",
+      "message": "嵌入式金级禁则：ISR 共享标志未使用 volatile，编译器优化可能导致主循环永远读不到更新值",
+      "suggestion": "声明为 volatile uint8_t flag; 或使用 atomic 操作/关中断保护",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_GOLD_NO_PRINTF_PRODUCTION",
+      "description": "生产固件禁止 printf 输出（影响实时性/泄露信息）",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": "\\bprintf\\s*\\(|\\bsprintf\\s*\\(",
+      "message": "嵌入式金级建议：printf 是变长函数，执行时间不确定且可能阻塞。生产固件应使用确定性日志。",
+      "suggestion": "使用 ITM/SWO 追踪、环形缓冲区日志、或编译时条件编译 #ifdef DEBUG",
+      "expected_precision": 0.70
+    },
+    {
+      "id": "EMB_GOLD_NO_UNSAFE",
+      "description": "Rust unsafe 块检测",
+      "severity": "block",
+      "target": "rust",
+      "pattern": "\\bunsafe\\s*(\\{|fn|impl)",
+      "message": "嵌入式金级禁则：unsafe 块/函数/实现绕过 Rust 内存安全保证",
+      "suggestion": "尽可能使用安全 Rust 替代；若必须使用 unsafe 请用 // SAFETY: 注释说明前提条件和安全不变量",
+      "expected_precision": 0.95
+    },
+    {
+      "id": "EMB_GOLD_NO_UNWRAP",
+      "description": "Rust unwrap() 调用检测",
+      "severity": "block",
+      "target": "rust",
+      "pattern": "\\.unwrap\\s*\\(",
+      "message": "嵌入式金级禁则：.unwrap() 在 None/Err 时 panic，嵌入式环境无 panic 恢复机制",
+      "suggestion": "使用 ? 操作符传播错误、.unwrap_or()/.unwrap_or_else() 提供默认值、或 match 显式处理",
+      "expected_precision": 0.92
+    },
+    {
+      "id": "EMB_GOLD_NO_PRINT_RUST",
+      "description": "Rust 生产固件禁止 println!/print!",
+      "severity": "warn",
+      "target": "rust",
+      "pattern": "\\bprintln!|\\bprint!\\b",
+      "message": "嵌入式金级建议：生产固件避免 println!/print! 标准输出",
+      "suggestion": "使用 log::info!/error!() + defmt/rtt-target 等嵌入式日志框架",
+      "expected_precision": 0.85
+    },
+    {
+      "id": "EMB_GOLD_TEST_COVERAGE_GATE",
+      "description": "核心模块测试覆盖率门禁 — 嵌入式要求 ≥ 80%（需配合 HIL 测试）",
+      "severity": "warn",
+      "target": "c|cpp|rust",
+      "pattern": null,
+      "_engine_check": "test_coverage",
+      "message": "嵌入式金级建议：核心模块测试覆盖率低于 80%。嵌入式系统需额外配合 HIL/仿真测试。",
+      "suggestion": "使用 gcov/lcov 统计覆盖率，CI 集成 coverage >= 80% 门禁；安全关键模块需 MC/DC 覆盖",
+      "_note": "此规则由引擎内置覆盖率检测逻辑执行。嵌入式覆盖率需配合 HIL 测试补充。"
+    },
+    {
+      "id": "EMB_GOLD_NO_OS_SYSTEM",
+      "description": "禁止 system()/popen() 调用（嵌入式环境通常无 shell）",
+      "severity": "block",
+      "target": "c|cpp",
+      "pattern": "\\bsystem\\s*\\(|\\bpopen\\s*\\(",
+      "message": "嵌入式金级禁则：system()/popen() 在嵌入式环境中通常不可用，且存在命令注入风险",
+      "suggestion": "直接调用 API/驱动接口替代 shell 命令",
+      "expected_precision": 0.95
+    },
+    {
+      "id": "EMB_GOLD_NO_VARARGS",
+      "description": "禁止使用可变参数函数 ...（MISRA C:2012 Rule 8.6 参考：类型安全）",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": "\\b\\w+\\s*\\([^)]*,\\s*\\.\\.\\.\\)",
+      "message": "嵌入式金级建议：可变参数函数缺乏类型检查，可能导致栈破坏（MISRA 8.6）",
+      "suggestion": "使用固定参数函数替代；如 printf 类函数确实需要，使用 vfprintf 安全版本",
+      "expected_precision": 0.80
+    },
+    {
+      "id": "EMB_GOLD_NO_UNION_TYPE_PUNNING",
+      "description": "禁止 union 类型双关（MISRA C:2012 Rule 19.2：避免未定义行为）",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": "\\bunion\\s+\\w+\\s*\\{",
+      "message": "嵌入式金级建议：union 类型双关导致未定义行为，不同编译器/平台结果不一致（MISRA 19.2）",
+      "suggestion": "使用 memcpy 进行类型转换；或使用位域结构体替代 union",
+      "expected_precision": 0.85
+    },
+    {
+      "id": "EMB_GOLD_NO_RECURSION",
+      "description": "禁止递归调用（MISRA C:2012 Rule 17.2：栈溢出风险）",
+      "severity": "block",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "recursion",
+      "message": "嵌入式金级禁则：递归调用栈深度不可预测，嵌入式系统栈空间有限（通常 1-4KB），栈溢出导致硬故障（MISRA 17.2）",
+      "suggestion": "使用迭代替代递归；或使用显式栈数据结构控制最大深度",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_GOLD_NO_IMPLICIT_INT",
+      "description": "禁止隐式 int 类型（MISRA C:2012 Rule 8.1：所有类型必须显式声明）",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": "(?m)^(?:static\\s+)?(?:inline\\s+)?[A-Za-z_]\\w*\\s+\\w+\\s*\\([^;]*\\)\\s*(?:\\{|$)(?!.*\\b(?:void|int|char|short|long|float|double|bool|size_t|uint\\d+_t|int\\d+_t|struct|enum|const|static|inline|extern)\\b)",
+      "message": "嵌入式金级建议：函数返回类型未显式声明（MISRA 8.1）。C99+ 中隐式 int 已被移除。",
+      "suggestion": "所有函数显式声明返回类型，包括 void",
+      "expected_precision": 0.60
+    },
+    {
+      "id": "EMB_GOLD_NO_POINTER_CAST",
+      "description": "禁止不同类型指针间强转（MISRA C:2012 Rule 11.8：指针转换安全）",
+      "severity": "block",
+      "target": "c|cpp",
+      "pattern": "\\(\\s*(?:unsigned\\s+|signed\\s+)?(?:char|int|short|long|float|double|void)\\s*\\*\\s*\\)\\s*\\w+",
+      "message": "嵌入式金级禁则：指针类型强转可能导致对齐异常/总线错误（MISRA 11.8）",
+      "suggestion": "使用 union/memcpy 进行安全转换；或使用 uint8_t* 通用字节指针",
+      "expected_precision": 0.70
+    }
+  ]
+}

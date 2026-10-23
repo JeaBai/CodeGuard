@@ -1,0 +1,265 @@
+{
+  "_comment": "CodeGuard 嵌入式银级（业务固件）质量门禁预设 — 适合非安全关键嵌入式项目/原型/内部工具固件",
+  "_version": "3.0.0",
+  "_level": "silver",
+  "_industry": "embedded",
+  "_c_dialect": "auto",
+  "_description": "嵌入式银级门禁适用于非安全关键固件、原型开发、内部工具固件。较金级放宽阈值，部分 block 降级为 warn，保留安全红线。",
+  "_usage": "通过 config.json 的 industry=embedded + gate_level=silver 自动选择此规则集。",
+  "_comparison": "银级 vs 金级：CC放宽20%(15→18)，嵌套放宽33%(3→4)，文件行数放宽20%(500→600)，block规则从17条减至11条",
+
+  "ignorePaths": {
+    "patterns": [
+      "**/_shared/**",
+      "**/vendor/**",
+      "**/third_party/**",
+      "**/CMSIS/**",
+      "**/Hal/**",
+      "**/Drivers/**",
+      "**/*.min.js",
+      "**/node_modules/**",
+      "**/__pycache__/**",
+      "**/.git/**",
+      "**/build/**",
+      "**/Debug/**",
+      "**/Release/**",
+      "**/*.o",
+      "**/*.d",
+      "**/*.map",
+      "**/*.hex",
+      "**/*.bin",
+      "**/*.elf"
+    ]
+  },
+
+  "thresholds": {
+    "cyclomatic_complexity_warn": 15,
+    "cyclomatic_complexity_block": 18,
+    "max_function_params_warn": 6,
+    "max_function_params_block": 8,
+    "max_nesting_warn": 3,
+    "max_nesting_block": 4,
+    "max_class_lines_warn": 400,
+    "max_class_lines_block": 600,
+    "max_class_methods_warn": 18,
+    "max_interface_methods_warn": 10,
+    "duplicate_lines_warn": 5,
+    "duplicate_lines_block": 8,
+    "cross_file_duplicate_block": 16,
+    "max_file_lines_warn": 400,
+    "max_file_lines_block": 600,
+    "test_coverage_min_pct": 60,
+    "isr_max_lines": 120,
+    "stack_array_max_bytes": 512
+  },
+
+  "rules": [
+    {
+      "id": "EMB_SILVER_NO_EVAL",
+      "description": "禁止 eval/exec/Function 动态执行",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?<!['\"\\w])\\b(eval|exec|Function)\\s*\\(",
+      "message": "嵌入式银级禁则：动态代码执行在嵌入式环境中无法隔离",
+      "suggestion": "使用函数指针表/状态机替代动态分发",
+      "case_sensitive": true
+    },
+    {
+      "id": "EMB_SILVER_NO_HARDCODED_URL",
+      "description": "避免硬编码外部 URL/IP 地址",
+      "severity": "warn",
+      "target": "all",
+      "pattern": "https?://(?!localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0)[^\\s\"'`]+",
+      "message": "嵌入式银级建议：避免硬编码 URL/IP",
+      "suggestion": "通过配置分区/OTA 配置文件注入",
+      "expected_precision": 0.80
+    },
+    {
+      "id": "EMB_SILVER_NO_MAGIC_NUMBER",
+      "description": "避免未命名的魔法数字",
+      "severity": "info",
+      "target": "c|cpp|rust",
+      "pattern": "(?<![\\w.#$'\"=/])([3-9]\\d{2,}|\\d{5,})(?!\\s*(?:年|月|日|px|em|rem|%|[A-Z_]|0x))(?![\\w])",
+      "message": "嵌入式银级提醒：疑似魔法数字",
+      "suggestion": "使用 #define 常量或 enum",
+      "expected_precision": 0.90
+    },
+    {
+      "id": "EMB_SILVER_NO_TODO_WITHOUT_TICKET",
+      "description": "TODO 注释建议关联工单编号",
+      "severity": "info",
+      "target": "c|cpp|rust",
+      "pattern": "\\bTODO\\b(?!\\s*[\\(:]\\s*[#A-Za-z]+[-_]?\\d+)",
+      "message": "嵌入式银级提醒：TODO 注释建议关联工单",
+      "suggestion": "改为 TODO(#ISSUE_ID): 说明"
+    },
+    {
+      "id": "EMB_SILVER_SENSITIVE_DATA",
+      "description": "禁止明文存储敏感数据",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?im)(?:password|passwd|secret|api_key|token|private_key|certificate)\\s*=\\s*[\"'][^\"']{4,}[\"']\\s*(?:#|$|\\n)(?!.*(?:encrypt|hash|aes|kms|vault|secure_store))",
+      "message": "嵌入式银级禁则：敏感字段明文赋值",
+      "suggestion": "使用安全存储区（OTP/Flash保护区/TEE）",
+      "expected_precision": 0.70
+    },
+    {
+      "id": "EMB_SILVER_LOG_CREDENTIAL_LEAK",
+      "description": "避免在日志中输出凭据信息",
+      "severity": "warn",
+      "target": "c|cpp|rust",
+      "pattern": "(?im)(?:printf|fprintf|sprintf|LOG|log_|print|UART_Send)\\s*\\(.*(?:password|passwd|secret|token|api_key|private_key|credential)",
+      "message": "嵌入式银级建议：日志中包含敏感字段名",
+      "suggestion": "日志脱敏：只输出操作结果",
+      "expected_precision": 0.80
+    },
+    {
+      "id": "EMB_SILVER_NO_DYNAMIC_ALLOC",
+      "description": "禁止动态内存分配 malloc/free/calloc/realloc（MISRA 21.3）",
+      "severity": "block",
+      "target": "c|cpp",
+      "pattern": "\\b(?:p?malloc|calloc|realloc)\\s*\\(|\\bnew\\b\\s+[A-Za-z_]|\\bdelete\\b\\s*(?:\\[\\s*\\]\\s*)?[\\w.]+",
+      "message": "嵌入式银级禁则：动态内存分配导致堆碎片/不确定延迟（MISRA 21.3）",
+      "suggestion": "使用静态内存池/栈分配/对象池",
+      "expected_precision": 0.95
+    },
+    {
+      "id": "EMB_SILVER_GOTO_LIMIT",
+      "description": "限制 goto 使用（MISRA 15.2）",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": "\\bgoto\\s+\\w+\\s*;",
+      "message": "嵌入式银级建议：goto 使用受 MISRA 15.2 限制",
+      "suggestion": "使用结构化控制流替代 goto",
+      "expected_precision": 0.90
+    },
+    {
+      "id": "EMB_SILVER_VOLATILE_REGISTER",
+      "description": "内存映射寄存器指针必须使用 volatile 限定（MISRA 8.9）",
+      "severity": "block",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "volatile_register",
+      "message": "嵌入式银级禁则：MMIO 寄存器指针未使用 volatile",
+      "suggestion": "使用 volatile 限定: #define REG ((volatile uint32_t*)0x40000000)",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_SILVER_STACK_ARRAY_MAX",
+      "description": "局部数组建议不超过 512 字节",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "stack_depth",
+      "message": "嵌入式银级建议：局部数组过大可能导致栈溢出",
+      "suggestion": "使用 static 局部变量/全局缓冲区/内存池",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_SILVER_ISR_NO_BLOCKING",
+      "description": "ISR 内禁止调用阻塞函数",
+      "severity": "block",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "isr_blocking",
+      "message": "嵌入式银级禁则：ISR 内调用阻塞函数导致中断响应延迟",
+      "suggestion": "ISR 内仅做标志位设置/环形缓冲区写入",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_SILVER_ISR_MAX_LINES",
+      "description": "ISR 函数体建议不超过 120 行",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "isr_length",
+      "message": "嵌入式银级建议：ISR 过长增加中断延迟",
+      "suggestion": "将复杂处理移到任务中",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_SILVER_NO_FLOAT_ISR",
+      "description": "ISR 内避免使用浮点运算",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "isr_float",
+      "message": "嵌入式银级建议：ISR 内浮点运算需要保存/恢复 FPU 上下文",
+      "suggestion": "将浮点运算移到主循环/任务中",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_SILVER_VOLATILE_ISR_FLAG",
+      "description": "ISR 共享标志变量应使用 volatile 限定",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "volatile_isr_flag",
+      "message": "嵌入式银级建议：ISR 共享标志未使用 volatile，编译器优化可能导致主循环读不到更新值",
+      "suggestion": "声明为 volatile uint8_t flag;",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_SILVER_NO_PRINTF_PRODUCTION",
+      "description": "生产固件建议避免 printf 输出",
+      "severity": "info",
+      "target": "c|cpp",
+      "pattern": "\\bprintf\\s*\\(|\\bsprintf\\s*\\(",
+      "message": "嵌入式银级提醒：printf 执行时间不确定，生产固件建议使用确定性日志",
+      "suggestion": "使用 ITM/SWO 追踪或编译时条件编译",
+      "expected_precision": 0.70
+    },
+    {
+      "id": "EMB_SILVER_NO_UNSAFE",
+      "description": "Rust unsafe 块检测",
+      "severity": "warn",
+      "target": "rust",
+      "pattern": "\\bunsafe\\s*(\\{|fn|impl)",
+      "message": "嵌入式银级建议：unsafe 块绕过 Rust 内存安全保证",
+      "suggestion": "使用安全 Rust 替代；若必须使用 unsafe 请用 // SAFETY: 注释说明",
+      "expected_precision": 0.95
+    },
+    {
+      "id": "EMB_SILVER_NO_UNWRAP",
+      "description": "Rust unwrap() 调用检测",
+      "severity": "warn",
+      "target": "rust",
+      "pattern": "\\.unwrap\\s*\\(",
+      "message": "嵌入式银级建议：.unwrap() 在 None/Err 时 panic",
+      "suggestion": "使用 ? 操作符或 .unwrap_or()",
+      "expected_precision": 0.92
+    },
+    {
+      "id": "EMB_SILVER_NO_OS_SYSTEM",
+      "description": "禁止 system()/popen() 调用",
+      "severity": "block",
+      "target": "c|cpp",
+      "pattern": "\\bsystem\\s*\\(|\\bpopen\\s*\\(",
+      "message": "嵌入式银级禁则：system()/popen() 在嵌入式环境通常不可用且存在注入风险",
+      "suggestion": "直接调用 API/驱动接口",
+      "expected_precision": 0.95
+    },
+    {
+      "id": "EMB_SILVER_NO_RECURSION",
+      "description": "禁止递归调用（MISRA 17.2）",
+      "severity": "warn",
+      "target": "c|cpp",
+      "pattern": null,
+      "_engine_check": "recursion",
+      "message": "嵌入式银级建议：递归调用栈深度不可预测，嵌入式系统栈空间有限（MISRA 17.2）",
+      "suggestion": "使用迭代替代递归",
+      "_note": "此规则由 quality_embedded.py 检测器执行"
+    },
+    {
+      "id": "EMB_SILVER_TEST_COVERAGE_GATE",
+      "description": "核心模块测试覆盖率门禁 — 银级要求 ≥ 60%",
+      "severity": "info",
+      "target": "c|cpp|rust",
+      "pattern": null,
+      "_engine_check": "test_coverage",
+      "message": "嵌入式银级提醒：核心模块测试覆盖率低于 60%",
+      "suggestion": "为关键业务逻辑编写单元测试",
+      "_note": "此规则由引擎内置覆盖率检测逻辑执行"
+    }
+  ]
+}
