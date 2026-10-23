@@ -1,0 +1,89 @@
+{
+  "_comment": "fc-guardian 飞控规则清单 — 对标大疆/ArduPilot/PX4 项目管理能力",
+  "_version": "0.1.0",
+  "_scope": "flight-controller",
+  "_description": "飞控硬件领域静态检测规则。独立于 CodeGuard，专注飞控安全与硬件配置一致性。",
+
+  "rules": [
+    {
+      "id": "fc-pin-conflict",
+      "category": "fc_pin",
+      "severity": "block",
+      "description": "同一物理引脚被多个外设占用（.ioc 中 Signal 冲突）",
+      "rationale": "引脚冲突导致硬件短路或功能失效，是飞控致命的硬件配置错误",
+      "detector": "pin_checker.check_pin_conflicts"
+    },
+    {
+      "id": "fc-pin-unused",
+      "category": "fc_pin",
+      "severity": "warn",
+      "description": "配置了引脚但未分配 Signal（悬空引脚）",
+      "rationale": "悬空引脚可能引入噪声或未定义行为",
+      "detector": "pin_checker.check_unused_pins"
+    },
+    {
+      "id": "fc-uart-baud-mismatch",
+      "category": "fc_uart",
+      "severity": "warn",
+      "description": "USART 波特率与时钟树不匹配或收发配置不一致",
+      "rationale": "波特率错误导致通信失败，飞控遥控/遥测链路失效",
+      "detector": "uart_checker.check_baud_consistency"
+    },
+    {
+      "id": "fc-uart-rx-no-tx",
+      "category": "fc_uart",
+      "severity": "warn",
+      "description": "USART 配置了 RX 但未配置对应 TX 引脚（或反之）",
+      "rationale": "收发引脚不对称导致通信单向或失效",
+      "detector": "uart_checker.check_rx_tx_pairs"
+    },
+    {
+      "id": "fc-refresh-no-loop",
+      "category": "fc_refresh",
+      "severity": "warn",
+      "description": "主循环无固定控制周期（缺定时器中断/RTOS 任务调度）",
+      "rationale": "无固定刷新率导致控制不稳定，违反 PX4 调度规范",
+      "detector": "refresh_checker.check_control_loop"
+    },
+    {
+      "id": "fc-refresh-blocking-delay",
+      "category": "fc_refresh",
+      "severity": "block",
+      "description": "控制循环内使用阻塞延时（HAL_Delay/vTaskDelay 在 PID 循环中）",
+      "rationale": "阻塞延时破坏实时性，是飞控失控的直接原因",
+      "detector": "refresh_checker.check_blocking_delay"
+    },
+    {
+      "id": "fc-state-no-failsafe",
+      "category": "fc_state",
+      "severity": "block",
+      "description": "缺 failsafe 失控保护状态机（信号丢失/低电量/传感器异常处理）",
+      "rationale": "无失控保护在遥控信号丢失时飞控继续执行最后指令，极其危险",
+      "detector": "state_machine_checker.check_failsafe"
+    },
+    {
+      "id": "fc-state-no-arming",
+      "category": "fc_state",
+      "severity": "block",
+      "description": "缺 arming 解锁状态机（电机解锁前置条件校验）",
+      "rationale": "无解锁校验可能在未满足安全条件时启动电机",
+      "detector": "state_machine_checker.check_arming"
+    },
+    {
+      "id": "fc-safety-no-watchdog",
+      "category": "fc_safety",
+      "severity": "block",
+      "description": "缺看门狗（IWDG/WWDG）配置",
+      "rationale": "飞控死机/跑飞时无自动复位，导致坠机",
+      "detector": "flight_safety.check_watchdog"
+    },
+    {
+      "id": "fc-safety-no-calibration",
+      "category": "fc_safety",
+      "severity": "warn",
+      "description": "缺传感器校准检查（IMU/GPS/磁力计/电调校准）",
+      "rationale": "未校准传感器导致姿态解算错误，飞行不稳",
+      "detector": "flight_safety.check_calibration"
+    }
+  ]
+}

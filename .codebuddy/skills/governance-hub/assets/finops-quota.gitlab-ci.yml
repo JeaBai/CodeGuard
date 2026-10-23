@@ -1,0 +1,83 @@
+# =============================================================================
+# D11 云成本治理 FinOps — 资源配额 + 镜像大小 + 成本标签 CI 门禁（GitLab CI 模板）
+# 依据：CNCF 超支主因过度配置（B-32，已验证）、Datadog 83% 容器成本空闲（B-4，已验证）、
+#       Conftest/OPA 官方（B-36）、DockerSlim 镜像瘦身（B-39，厂商数据已软化）
+# 初创：仅用段 3 成本标签校验；成长型起全量启用
+# =============================================================================
+
+variables:
+  MAX_CPU_LIMIT: '2000m'      # 单容器 CPU limit 上限（基线，按业务调整）
+  MAX_MEM_LIMIT: '4Gi'        # 单容器内存 limit 上限
+  MAX_IMAGE_SIZE_MB: '500'    # 镜像大小阈值
+  K8S_MANIFEST_DIR: 'deploy/' # K8s 清单目录
+
+# ---- 段 1：conftest Rego 资源配额门禁（内联策略，免外部依赖）----
+k8s-resource-quota:
+  stage: test
+  image:
+    name: openpolicyagent/conftest:latest
+    entrypoint: [""]
+  script:
+    # 内联 Rego 策略：①缺失 requests/limits ②CPU/内存超上限
+    - mkdir -p policy && cat > policy/quota.rego <<'EOF'
+      package main
+      deny contains msg if {
+        input.kind == "Deployment"
+        container := input.spec.template.spec.containers[_]
+        not container.resources.limits
+        msg := sprintf("容器 %v 未声明 resources.limits（超配失控根源）", [container.name])
+      }
+      deny contains msg if {
+        input.kind == "Deployment"
+        container := input.spec.template.spec.containers[_]
+        not container.resources.requests
+        msg := sprintf("容器 %v 未声明 resources.requests（调度与成本核算前提）", [container.name])
+      }
+      EOF
+    - conftest test "$K8S_MANIFEST_DIR" --policy policy/ --namespace main
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - $K8S_MANIFEST_DIR/**/*
+
+# ---- 段 2：镜像大小门禁（构建后立即称量，超阈值失败）----
+image-size-gate:
+  stage: test
+  image: docker:latest
+  services: [docker:dind]
+  script:
+    - docker build -t candidate:$CI_COMMIT_SHORT_SHA .
+    - |
+      SIZE_MB=$(docker image inspect candidate:$CI_COMMIT_SHORT_SHA --format='{{.Size}}' | awk '{print int($1/1048576)}')
+      echo "镜像大小: ${SIZE_MB}MB（阈值 ${MAX_IMAGE_SIZE_MB}MB）"
+      if [ "$SIZE_MB" -gt "$MAX_IMAGE_SIZE_MB" ]; then
+        echo "镜像超阈值：启用多阶段构建/alpine 基础镜像/slim 工具瘦身"; exit 1
+      fi
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---- 段 3：成本标签校验（初创体量最小项：无标签不部署，成本可归因）----
+cost-label-check:
+  stage: test
+  image: alpine:latest
+  script:
+    # 强制 K8s 清单携带 team/cost-center/env 三类标签（showback 前提）
+    - |
+      MISSING=0
+      for f in $(find "$K8S_MANIFEST_DIR" -name '*.yaml' -o -name '*.yml'); do
+        for label in team cost-center env; do
+          grep -q "$label:" "$f" || { echo "MISS: $f 缺少成本标签 $label"; MISSING=1; }
+        done
+      done
+      [ "$MISSING" = "1" ] && exit 1 || echo "成本标签齐全"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - $K8S_MANIFEST_DIR/**/*
+
+# =============================================================================
+# GitHub Actions 对照：
+#   - uses: openpolicyagent/conftest-action@master
+#     with: { paths: deploy/, policy: policy/ }
+# 进阶（Phase 3，大型体量）：OPA Gatekeeper 集群准入（B-35）+ Kubecost 成本基线 PR 评论（B-37）
+# =============================================================================

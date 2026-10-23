@@ -1,0 +1,151 @@
+# ──────────────────────────────────────────────────────
+# governance-hub 发布前治理门禁 — GitHub Actions 模板
+# 用途：Push 到 release/* 分支时触发三合一检视
+# 放置：.github/workflows/governance-gate.yml
+# ──────────────────────────────────────────────────────
+
+name: governance-hub 发布前治理门禁
+
+on:
+  push:
+    branches:
+      - 'release/*'
+      - 'main'
+      - 'master'
+  pull_request:
+    branches:
+      - 'main'
+      - 'master'
+    paths:
+      - 'api/**'
+      - 'infra/**'
+      - 'terraform/**'
+      - '.cost-baseline.json'
+
+jobs:
+  cost-gate:
+    name: 成本基线检视
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: infracost/actions/setup@v3
+      - name: 成本基线比对
+        run: |
+          python .codebuddy/skills/governance-hub/scripts/governance_gate.py \
+            --mode cost-only \
+            --cost-threshold 20 \
+            --format json > cost_result.json
+          EXIT_CODE=$?
+          cat cost_result.json
+          exit $EXIT_CODE
+
+  contract-gate:
+    name: 契约破坏性变更检测
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # 需要 HEAD~1 进行 diff
+      - name: 安装 oasdiff
+        run: go install github.com/tufin/oasdiff/cmd/oasdiff@latest
+      - name: 契约破坏性检测
+        run: |
+          export PATH="$HOME/go/bin:$PATH"
+          python .codebuddy/skills/governance-hub/scripts/governance_gate.py \
+            --mode contract-only \
+            --format json > contract_result.json
+          EXIT_CODE=$?
+          python -c "
+          import json
+          with open('contract_result.json') as f:
+              d = json.load(f)
+          blocks = [i for i in d['issues'] if i['severity'] == 'block']
+          if blocks:
+              print(f'🔴 检测到 {len(blocks)} 条破坏性 API 变更：')
+              for b in blocks:
+                  print(f'   {b[\"file\"]}: {b[\"message\"]}')
+              print('请通知 #api-subscribers 频道的下游团队')
+          "
+          exit $EXIT_CODE
+
+  trace-gate:
+    name: 需求追溯完整性检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 需求追溯检视
+        run: |
+          python .codebuddy/skills/governance-hub/scripts/governance_gate.py \
+            --mode trace-only \
+            --coverage-ratio 0.8 \
+            --format json > trace_result.json
+          EXIT_CODE=$?
+          cat trace_result.json
+          exit $EXIT_CODE
+
+  deploy-integrity-gate:
+    name: 部署完整性检视
+    runs-on: ubuntu-latest
+    needs: [cost-gate, contract-gate, trace-gate]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 部署完整性检视
+        run: |
+          python .codebuddy/skills/governance-hub/scripts/governance_gate.py \
+            --mode deploy-only \
+            --format json > deploy_result.json
+          EXIT_CODE=$?
+          python -c "
+          import json
+          with open('deploy_result.json') as f:
+              d = json.load(f)
+          issues = d.get('issues', [])
+          info = [i for i in issues if i.get('severity') == 'info']
+          blocks = [i for i in issues if i.get('severity') == 'block']
+          if blocks:
+              print(f'部署完整性异常: {len(blocks)} 个节点版本不一致！')
+              for b in blocks:
+                  print(f'  [BLOCK] {b[\"message\"]}')
+              exit(2)
+          elif info:
+              for i in info:
+                  print(f'部署完整性: {i[\"message\"]}')
+          "
+          exit $EXIT_CODE
+
+      - name: 上传部署完整性报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-integrity-report
+          path: deploy_result.json
+          retention-days: 30
+
+  release-notes:
+    name: 生成 Release Notes 草稿
+    if: startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    needs: [deploy-integrity-gate]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 生成 Release Notes
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            python .codebuddy/skills/governance-hub/scripts/release_notes_draft.py \
+              --from "$LAST_TAG" --to HEAD > RELEASE_NOTES_DRAFT.md
+          else
+            python .codebuddy/skills/governance-hub/scripts/release_notes_draft.py \
+              --from HEAD~50 > RELEASE_NOTES_DRAFT.md
+          fi
+      - name: 上传草稿
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes-draft
+          path: RELEASE_NOTES_DRAFT.md
+          retention-days: 90

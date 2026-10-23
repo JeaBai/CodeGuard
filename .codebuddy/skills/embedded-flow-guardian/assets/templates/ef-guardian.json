@@ -1,0 +1,56 @@
+{
+  "_comment": "embedded-flow-guardian 配置模板。复制到**项目根目录**并重命名为 .ef-guardian.json。",
+  "_principle": "项目特定值只应出现在这里，不应出现在 Skill 的通用代码中——这样 Skill 才能跨项目复用。",
+  "_usage": "python scripts/ef_scan.py --path . --config .ef-guardian.json",
+
+  "defaultLevel": "silver",
+
+  "_corePaths_说明": [
+    "本项目的核心目录（相对项目根，不含通配符即可，会自动补 /**）。",
+    "作用一：自动展开为 gold 门禁规则 —— 核心目录从严、其余从宽。",
+    "作用二：作为 ef_ci 判定「单元测试缺失」等问题的严重度依据。",
+    "留空则退化为全局单一门禁级别。"
+  ],
+  "corePaths": [
+    "<你的核心固件目录>"
+  ],
+
+  "_moduleLevels_说明": [
+    "按 glob 指定门禁级别，按声明顺序取第一个命中项 —— 更具体的规则写在前面。",
+    "gold  : 缺失类问题升级为 BLOCK",
+    "silver: 缺失类问题为 WARN",
+    "显式声明优先于 corePaths 的自动展开。"
+  ],
+  "moduleLevels": {
+    "<核心目录>/**": "gold",
+    "<测试/仿真目录>/**": "silver"
+  },
+
+  "_excludePaths_说明": [
+    "精确排除路径（第三方参考代码树、厂商 SDK 等），避免参考实现污染自研判定。",
+    "注：以 -master / -main / -develop 结尾的目录名，以及已知第三方固件名",
+    "（inav / betaflight / ardupilot / px4 等）已被自动识别，通常无需在此重复声明。"
+  ],
+  "excludePaths": [
+    "<第三方参考代码树路径>/**"
+  ],
+
+  "_preferredPorts_说明": [
+    "串口自动探测的优先顺序。**未配置时不会猜测**，仅当存在唯一可用端口才自动选用。",
+    "这样「选错端口」会成为显式错误，而不是静默行为。"
+  ],
+  "preferredPorts": [],
+
+  "_telemetryFields_说明": "遥测 CSV 的期望字段数；不符即告警/丢弃。留空则不校验。",
+  "telemetryFields": null,
+
+  "_referenceTrees_说明": "额外的参考代码树路径前缀（相对项目根）。",
+  "referenceTrees": [],
+
+  "_options_说明": {
+    "staleDocDays": "文档陈旧阈值（天），超过且显著落后于源码即提示复核，默认 180",
+    "maxFiles": "单次遍历文件上限，防止大项目卡死，默认 20000"
+  },
+  "staleDocDays": 180,
+  "maxFiles": 20000
+}

@@ -1,0 +1,216 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "description": "Governance Hub 模块标签定义 — 每个标签对 AI 生成/修改代码施加精准约束。与 CodeGuard blueprint_schema.py 的 _VALID_TAGS 白名单对齐。",
+    "last_updated": "2025-08-02",
+    "total_module_tags": 8,
+    "total_param_tags": 3
+  },
+
+  "module_tags": {
+    "frozen": {
+      "description": "该模块禁止结构性修改",
+      "ai_constraint": "只能修改实现细节，不能拆分/合并/移动文件/改变公共 API",
+      "allows": [
+        "内部函数重写",
+        "变量重命名",
+        "添加注释",
+        "修复 bug（不改变行为语义）"
+      ],
+      "forbids": [
+        "文件拆分",
+        "文件合并",
+        "公共 API 变更",
+        "新增依赖",
+        "移动文件到其他目录"
+      ],
+      "severity_hint": "block",
+      "conflicts_with": ["allow_split", "no_split"]
+    },
+
+    "no_split": {
+      "description": "该模块禁止拆分",
+      "ai_constraint": "可以优化内部实现，但不能将代码移到新文件",
+      "allows": [
+        "内部重构",
+        "复杂度优化",
+        "嵌套层级优化",
+        "函数内部重写",
+        "变量重命名"
+      ],
+      "forbids": [
+        "创建新文件从本模块拆分",
+        "移动函数到其他文件",
+        "改变模块文件边界"
+      ],
+      "severity_hint": "block",
+      "conflicts_with": ["allow_split", "frozen"]
+    },
+
+    "allow_split": {
+      "description": "该模块允许拆分",
+      "ai_constraint": "可以拆分，但必须保持公共 API 不变，且必须将重复函数提取到 shared_utils",
+      "allows": [
+        "文件拆分",
+        "函数提取",
+        "创建子模块"
+      ],
+      "forbids": [
+        "公共 API 变更（除非有 frozen_api 标签时允许）"
+      ],
+      "requires": [
+        {
+          "field": "split_into",
+          "description": "拆分目标路径/文件名列表"
+        },
+        {
+          "field": "shared_utils_must_extract",
+          "description": "bool: 是否必须将重复函数提取到 shared_utils"
+        }
+      ],
+      "severity_hint": "info",
+      "conflicts_with": ["frozen", "no_split"]
+    },
+
+    "leaf_only": {
+      "description": "该模块只被调用，不调用其他模块",
+      "ai_constraint": "禁止给该模块添加新的外部依赖",
+      "allows": [
+        "内部修改",
+        "函数重写",
+        "复杂度优化"
+      ],
+      "forbids": [
+        "新增 import/require 外部模块",
+        "新增模块间依赖",
+        "引入第三方库"
+      ],
+      "severity_hint": "warn",
+      "conflicts_with": []
+    },
+
+    "shared_util": {
+      "description": "该函数/模块是公共复用单元",
+      "ai_constraint": "禁止复制此函数，只能 import 调用",
+      "allows": [
+        "修改实现（保持签名不变）",
+        "优化内部逻辑",
+        "添加文档注释"
+      ],
+      "forbids": [
+        "复制到其他文件",
+        "删除",
+        "重命名（除非批量更新所有 consumer）",
+        "改变参数签名（破坏性修改）"
+      ],
+      "severity_hint": "block",
+      "conflicts_with": ["frozen"]
+    },
+
+    "global_config": {
+      "description": "该全局变量是配置项，允许保留",
+      "ai_constraint": "CodeGuard 跳过此变量的 GOLD_NO_GLOBAL_STATE 检查",
+      "allows": [
+        "读取",
+        "通过环境变量/配置中心覆盖初始值"
+      ],
+      "forbids": [
+        "运行时修改",
+        "删除（除非有迁移计划）",
+        "在多个 goroutine/线程中无保护写入"
+      ],
+      "severity_hint": "warn",
+      "conflicts_with": []
+    },
+
+    "test_only": {
+      "description": "该模块仅用于测试",
+      "ai_constraint": "放宽生产代码规则，允许 print/assert/未处理异常",
+      "allows": [
+        "print 调试输出",
+        "assert 断言",
+        "简化错误处理",
+        "硬编码测试数据",
+        "使用 mock/stub"
+      ],
+      "forbids": [
+        "被生产代码 import",
+        "包含真实的数据库连接信息",
+        "在 CI 环境外执行破坏性操作"
+      ],
+      "severity_hint": "info",
+      "conflicts_with": ["core", "frozen"]
+    },
+
+    "legacy": {
+      "description": "遗留代码，有技术债但暂不修改",
+      "ai_constraint": "禁止重构，只允许 bugfix",
+      "allows": [
+        "bug 修复",
+        "安全漏洞修补",
+        "添加注释标记技术债"
+      ],
+      "forbids": [
+        "重构",
+        "拆分",
+        "风格统一",
+        "升级依赖版本",
+        "修改公共 API"
+      ],
+      "requires": [
+        {
+          "field": "expires",
+          "description": "ISO8601 日期: 过期后提醒处理（格式: YYYY-MM-DD）"
+        }
+      ],
+      "severity_hint": "warn",
+      "conflicts_with": ["core", "allow_split"]
+    },
+
+    "core": {
+      "description": "核心模块，修改需特别谨慎",
+      "ai_constraint": "任何修改需附带回归测试和 code review 记录",
+      "allows": [
+        "所有操作（需额外审核）"
+      ],
+      "forbids": [
+        "无测试的修改",
+        "无 code review 的修改",
+        "破坏性 API 变更（需至少一个版本的弃用期）"
+      ],
+      "severity_hint": "block",
+      "conflicts_with": ["test_only", "legacy"]
+    }
+  },
+
+  "param_tags": {
+    "global_config": {
+      "description": "配置项，允许全局保留",
+      "scope": "global",
+      "ai_constraint": "CodeGuard 跳过 GOLD_NO_GLOBAL_STATE 检查，但禁止运行时写入"
+    },
+    "local_only": {
+      "description": "必须为局部变量",
+      "scope": "local",
+      "ai_constraint": "禁止提升为全局/模块级变量"
+    },
+    "immutable": {
+      "description": "声明后不可修改",
+      "scope": "any",
+      "ai_constraint": "禁止任何赋值操作（包括属性赋值）"
+    }
+  },
+
+  "action_verbs": {
+    "split_file": "将模块内代码拆分到新文件",
+    "merge_files": "将多个文件合并为一个",
+    "change_api": "修改公共 API（函数签名、参数、返回值类型）",
+    "add_dependency": "给模块添加新的外部依赖",
+    "copy_function": "将函数从 shared_utils 复制到本地",
+    "new_global_var": "新增模块级全局变量",
+    "rename_export": "重命名导出函数/类",
+    "move_code": "将代码从一个文件移动到另一个文件",
+    "add_file": "在模块内新增文件",
+    "delete_file": "删除模块内的文件"
+  }
+}

@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>项目管理全流程助手 — 可视化面板</title>
+<style>
+:root {
+  --bg: #f8f9fb;
+  --surface: #fff;
+  --border: #e5e7eb;
+  --text: #1f2937;
+  --text-secondary: #6b7280;
+  --text-muted: #9ca3af;
+  --primary: #4f46e5;
+  --primary-light: #e0e7ff;
+  --success: #059669;
+  --success-light: #d1fae5;
+  --warning: #d97706;
+  --warning-light: #fef3c7;
+  --danger: #dc2626;
+  --danger-light: #fee2e2;
+  --info: #2563eb;
+  --info-light: #dbeafe;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.05);
+  --shadow: 0 1px 3px rgba(0,0,0,.1),0 1px 2px rgba(0,0,0,.06);
+  --shadow-md: 0 4px 6px rgba(0,0,0,.07),0 2px 4px rgba(0,0,0,.06);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --transition: .2s ease;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}
+.app{max-width:1200px;margin:0 auto;padding:20px}
+
+/* Header */
+.header{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px 28px;margin-bottom:20px;box-shadow:var(--shadow-sm)}
+.header h1{font-size:1.75rem;font-weight:700;background:linear-gradient(135deg,var(--primary),#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.header p{color:var(--text-secondary);margin-top:4px;font-size:.9rem}
+
+/* Phase Progress Bar */
+.phase-progress{display:flex;gap:0;margin:16px 0 0;align-items:center;flex-wrap:wrap}
+.phase-dot{display:flex;align-items:center;gap:6px;font-size:.8rem;font-weight:500;cursor:pointer;padding:4px 0;transition:var(--transition);white-space:nowrap}
+.phase-dot .circle{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;border:2px solid var(--border);background:var(--surface);color:var(--text-muted);transition:var(--transition);flex-shrink:0}
+.phase-dot.active .circle{border-color:var(--primary);background:var(--primary);color:#fff}
+.phase-dot.done .circle{border-color:var(--success);background:var(--success);color:#fff}
+.phase-dot .label{display:none}
+@media(min-width:768px){.phase-dot .label{display:inline}}
+.phase-line{flex:1;height:2px;background:var(--border);min-width:16px;margin:0 4px;transition:var(--transition)}
+.phase-line.done{background:var(--success)}
+
+/* Main Layout */
+.main-layout{display:grid;grid-template-columns:1fr;gap:20px}
+@media(min-width:1024px){.main-layout{grid-template-columns:280px 1fr}}
+
+/* Sidebar */
+.sidebar{display:flex;flex-direction:column;gap:8px}
+.sidebar-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm)}
+.sidebar-card h3{font-size:.85rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:12px}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stat-item{text-align:center;padding:12px 8px;background:var(--bg);border-radius:var(--radius-sm)}
+.stat-value{font-size:1.5rem;font-weight:700;color:var(--primary)}
+.stat-label{font-size:.7rem;color:var(--text-muted);margin-top:2px}
+
+.nav-list{list-style:none;display:flex;flex-direction:column;gap:2px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:var(--radius-sm);cursor:pointer;font-size:.875rem;font-weight:500;color:var(--text-secondary);transition:var(--transition);border:none;background:none;width:100%;text-align:left}
+.nav-item:hover{background:var(--bg);color:var(--text)}
+.nav-item.active{background:var(--primary-light);color:var(--primary);font-weight:600}
+.nav-icon{width:20px;text-align:center;flex-shrink:0}
+.nav-badge{font-size:.7rem;padding:2px 8px;border-radius:10px;font-weight:600;margin-left:auto}
+.nav-badge.ok{background:var(--success-light);color:var(--success)}
+.nav-badge.warn{background:var(--warning-light);color:var(--warning)}
+.nav-badge.pending{background:var(--bg);color:var(--text-muted)}
+
+/* Main Content */
+.content-area{display:flex;flex-direction:column;gap:20px}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px 28px;box-shadow:var(--shadow-sm);display:none}
+.panel.active{display:block}
+.panel h2{font-size:1.25rem;font-weight:700;margin-bottom:4px}
+.panel .subtitle{color:var(--text-secondary);font-size:.85rem;margin-bottom:20px}
+
+/* Sections */
+.section{margin-bottom:24px}
+.section h3{font-size:1rem;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.section h3 .section-icon{font-size:1.1rem}
+
+/* Checklist */
+.checklist{display:flex;flex-direction:column;gap:2px}
+.check-item{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;border-radius:var(--radius-sm);transition:var(--transition);border:1px solid transparent;cursor:pointer}
+.check-item:hover{background:var(--bg);border-color:var(--border)}
+.check-item.checked{background:var(--success-light);border-color:#a7f3d0}
+.check-item input[type="checkbox"]{margin-top:2px;width:18px;height:18px;accent-color:var(--primary);flex-shrink:0;cursor:pointer}
+.check-item label{flex:1;cursor:pointer;font-size:.875rem}
+.check-item .purpose{font-size:.75rem;color:var(--text-muted);margin-top:2px}
+.check-item textarea{width:100%;margin-top:8px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:.8rem;resize:vertical;min-height:36px;display:none}
+.check-item.checked textarea{display:block}
+
+/* Progress per section */
+.section-progress{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.progress-bar{flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden}
+.progress-fill{height:100%;background:var(--success);border-radius:3px;transition:width .3s ease}
+.progress-text{font-size:.75rem;color:var(--text-muted);white-space:nowrap}
+
+/* Decision Matrix */
+.matrix-table{width:100%;border-collapse:collapse;font-size:.85rem;margin-top:8px}
+.matrix-table th{text-align:left;padding:10px 12px;background:var(--bg);font-weight:600;font-size:.8rem;color:var(--text-secondary);border-bottom:2px solid var(--border)}
+.matrix-table td{padding:10px 12px;border-bottom:1px solid var(--border)}
+.matrix-table input{width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:.8rem}
+
+/* Score */
+.score-display{display:flex;align-items:center;gap:16px;padding:20px;background:var(--bg);border-radius:var(--radius-sm);margin-top:12px}
+.score-circle{width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.5rem;font-weight:700;border:3px solid var(--primary);color:var(--primary);flex-shrink:0}
+.score-info{font-size:.85rem}
+.score-info strong{color:var(--primary)}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:10px 20px;border-radius:var(--radius-sm);font-family:inherit;font-size:.85rem;font-weight:600;cursor:pointer;transition:var(--transition);border:none}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{opacity:.9;transform:translateY(-1px)}
+.btn-outline{background:var(--surface);color:var(--primary);border:1.5px solid var(--primary)}
+.btn-outline:hover{background:var(--primary-light)}
+.btn-sm{padding:6px 14px;font-size:.8rem}
+.btn-danger{background:var(--danger);color:#fff}
+.btn-danger:hover{opacity:.9}
+.action-bar{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}
+
+/* Alerts */
+.alert{padding:12px 16px;border-radius:var(--radius-sm);font-size:.85rem;margin-bottom:16px}
+.alert-info{background:var(--info-light);color:var(--info);border:1px solid #93c5fd}
+.alert-warning{background:var(--warning-light);color:var(--warning);border:1px solid #fde68a}
+.alert-danger{background:var(--danger-light);color:var(--danger);border:1px solid #fecaca}
+.alert-success{background:var(--success-light);color:var(--success);border:1px solid #a7f3d0}
+
+/* Toast */
+.toast{position:fixed;bottom:24px;right:24px;padding:14px 20px;background:#1f2937;color:#fff;border-radius:var(--radius-sm);font-size:.85rem;box-shadow:0 10px 25px rgba(0,0,0,.15);z-index:999;animation:slideUp .3s ease;display:none}
+.toast.show{display:block}
+@keyframes slideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+/* Print */
+@media print{.sidebar,.action-bar,.header p,.toast{display:none}.panel{display:block!important;break-inside:avoid;box-shadow:none;border:none}}
+
+/* Summary section */
+.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:16px 0}
+.summary-card{background:var(--bg);border-radius:var(--radius-sm);padding:16px;text-align:center}
+.summary-card .num{font-size:2rem;font-weight:700}
+.summary-card .lbl{font-size:.75rem;color:var(--text-muted);margin-top:4px}
+
+/* Milestone Timeline */
+.timeline{position:relative;padding-left:24px;margin:16px 0}
+.timeline::before{content:'';position:absolute;left:8px;top:4px;bottom:4px;width:2px;background:var(--border)}
+.timeline-item{position:relative;margin-bottom:16px;padding-left:24px}
+.timeline-item::before{content:'';position:absolute;left:-20px;top:4px;width:12px;height:12px;border-radius:50%;border:2px solid var(--primary);background:var(--surface)}
+.timeline-item.done::before{background:var(--success);border-color:var(--success)}
+.timeline-item .tl-date{font-size:.75rem;color:var(--text-muted);font-weight:600}
+.timeline-item .tl-title{font-weight:600;font-size:.9rem}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:100}
+.modal-overlay.show{display:flex}
+.modal{background:var(--surface);border-radius:var(--radius);padding:28px;max-width:500px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.2)}
+.modal h3{margin-bottom:12px}
+.modal textarea{width:100%;min-height:100px;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;margin-bottom:12px}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="header">
+    <h1>项目管理全流程助手</h1>
+    <p>五阶段框架 · 可视化进度 · 本地数据持久化 · MCP 兼容</p>
+    <div class="phase-progress" id="phaseProgress">
+      <div class="phase-dot done" data-phase="1"><div class="circle">1</div><span class="label">可行性研判</span></div><div class="phase-line done"></div>
+      <div class="phase-dot" data-phase="2"><div class="circle">2</div><span class="label">启动规划</span></div><div class="phase-line"></div>
+      <div class="phase-dot" data-phase="3"><div class="circle">3</div><span class="label">执行跟踪</span></div><div class="phase-line"></div>
+      <div class="phase-dot" data-phase="4"><div class="circle">4</div><span class="label">复盘沉淀</span></div><div class="phase-line"></div>
+      <div class="phase-dot" data-phase="5"><div class="circle">5</div><span class="label">视野跟踪</span></div>
+    </div>
+  </header>
+
+  <div class="main-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-card">
+        <h3>项目概览</h3>
+        <div class="stat-grid">
+          <div class="stat-item"><div class="stat-value" id="totalQuestions">55</div><div class="stat-label">总检查项</div></div>
+          <div class="stat-item"><div class="stat-value" id="checkedCount">0</div><div class="stat-label">已完成</div></div>
+          <div class="stat-item"><div class="stat-value" id="progressPercent">0%</div><div class="stat-label">完成率</div></div>
+          <div class="stat-item"><div class="stat-value" id="currentPhase">阶段一</div><div class="stat-label">当前阶段</div></div>
+        </div>
+      </div>
+      <div class="sidebar-card">
+        <h3>快速导航</h3>
+        <ul class="nav-list" id="navList">
+          <li><button class="nav-item active" data-panel="summary"><span class="nav-icon">📊</span>项目总览</button></li>
+          <li><button class="nav-item" data-panel="phase1"><span class="nav-icon">🔍</span>阶段一：可行性研判<span class="nav-badge pending" id="badge1">待开始</span></button></li>
+          <li><button class="nav-item" data-panel="phase2"><span class="nav-icon">📐</span>阶段二：启动规划<span class="nav-badge pending" id="badge2">待开始</span></button></li>
+          <li><button class="nav-item" data-panel="phase3"><span class="nav-icon">🎯</span>阶段三：执行跟踪<span class="nav-badge pending" id="badge3">待开始</span></button></li>
+          <li><button class="nav-item" data-panel="phase4"><span class="nav-icon">📊</span>阶段四：复盘沉淀<span class="nav-badge pending" id="badge4">待开始</span></button></li>
+          <li><button class="nav-item" data-panel="phase5"><span class="nav-icon">🔭</span>阶段五：视野跟踪<span class="nav-badge pending" id="badge5">待开始</span></button></li>
+        </ul>
+      </div>
+      <div class="sidebar-card">
+        <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center" onclick="exportData()">📥 导出数据</button>
+        <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;margin-top:8px" onclick="importDataPrompt()">📤 导入数据</button>
+        <button class="btn btn-danger btn-sm" style="width:100%;justify-content:center;margin-top:8px" onclick="resetAll()">🔄 重置全部</button>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="content-area" id="contentArea">
+      <!-- Summary Panel -->
+      <div class="panel active" id="panel-summary">
+        <h2>📊 项目总览</h2>
+        <p class="subtitle">一站式查看五阶段进度与关键指标</p>
+        <div class="summary-grid" id="summaryGrid"></div>
+        <div class="section">
+          <h3>总体进度</h3>
+          <div class="section-progress">
+            <div class="progress-bar"><div class="progress-fill" id="overallProgressBar" style="width:0%"></div></div>
+            <span class="progress-text" id="overallProgressText">0/55 (0%)</span>
+          </div>
+        </div>
+        <div class="section" id="summaryDetails"></div>
+        <div class="action-bar">
+          <button class="btn btn-primary" onclick="navigateToPhase(1)">开始可行性研判</button>
+          <button class="btn btn-outline" onclick="window.print()">🖨️ 打印报告</button>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="modal-overlay" id="importModal">
+  <div class="modal">
+    <h3>导入数据</h3>
+    <p style="font-size:.85rem;color:var(--text-secondary);margin-bottom:12px">请粘贴之前导出的 JSON 数据：</p>
+    <textarea id="importTextarea" placeholder='{"phase1": {...}, ...}'></textarea>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-outline btn-sm" onclick="closeImportModal()">取消</button>
+      <button class="btn btn-primary btn-sm" onclick="importData()">确认导入</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ==================== DATA MODEL ====================
+const PHASES = {
+  phase1: { name:'第一阶段：可行性研判', icon:'🔍', goal:'判断「值不值得做」', badge:'badge1', sections:{
+    '市场调研':[
+      {id:1,q:'目标用户是谁？他们最痛的1-3个问题是什么？',p:'明确核心价值主张'},
+      {id:2,q:'市场上已有哪些解决方案？它们的优缺点分别是什么？',p:'竞品分析，找差异化空间'},
+      {id:3,q:'用户对现有方案最不满意的地方是什么？',p:'发现切入点'},
+      {id:4,q:'这个需求是「伪需求」还是「刚需」？用户愿意为此付费吗？',p:'验证付费意愿'},
+      {id:5,q:'市场规模有多大？未来3年是增长还是萎缩？',p:'判断赛道天花板'},
+    ],
+    '资源能力':[
+      {id:6,q:'完成这个项目，我最缺什么资源？（时间/钱/技能/人脉）',p:'识别瓶颈'},
+      {id:7,q:'我当前的能力能否覆盖核心环节？缺的部分如何补？',p:'能力匹配度评估'},
+      {id:8,q:'如果只给我3天时间，我能做出什么？',p:'MVP范围压缩测试'},
+    ],
+    '风险评估':[
+      {id:9,q:'这个项目最大的3个风险是什么？',p:'提前识别致命风险'},
+      {id:10,q:'如果项目失败，最坏的结果是什么？我能否承受？',p:'止损底线判断'},
+      {id:11,q:'有没有法律/合规/数据隐私方面的红线？',p:'合规预检'},
+    ]
+  }},
+  phase2: { name:'第二阶段：启动规划', icon:'📐', goal:'把「怎么做」想清楚', badge:'badge2', sections:{
+    '质量验收':[
+      {id:12,q:'「高质量」在这个项目里具体指什么？',p:'定义质量标准'},
+      {id:13,q:'必须满足的最低验收标准是什么？',p:'设定「完成」底线'},
+      {id:14,q:'哪些非功能需求是必须考虑的？',p:'技术债务预判'},
+      {id:15,q:'用户说「好用」的时候，他们在说什么？',p:'用户体验标准定义'},
+    ],
+    '进度里程碑':[
+      {id:16,q:'项目的最终交付日期是什么？倒推每个阶段的时间节点？',p:'制定时间基线'},
+      {id:17,q:'哪些功能是MVP必须有的？哪些可以放V2.0？',p:'范围管理'},
+      {id:18,q:'每个里程碑的交付物是什么？谁来验收？',p:'明确检查点'},
+      {id:19,q:'进度延期10%时，应该启动什么应急预案？',p:'偏差预警机制'},
+    ],
+    '技术选型':[
+      {id:20,q:'主流技术方案有哪些？各自优劣、社区活跃度、学习曲线？',p:'技术选型依据'},
+      {id:21,q:'技术栈的学习和开发成本是否匹配时间预算？',p:'能力-时间匹配'},
+      {id:22,q:'是否值得采用新技术？优势明显 vs 为了新鲜而用？',p:'技术决策理性检验'},
+      {id:23,q:'技术方案的长期维护成本如何？后续维护资源？',p:'可持续性评估'},
+    ]
+  }},
+  phase3: { name:'第三阶段：执行跟踪', icon:'🎯', goal:'确保「不走偏」', badge:'badge3', sections:{
+    '每日进度':[
+      {id:24,q:'今天完成了什么？跟计划比是提前还是滞后？',p:'日进度自检'},
+      {id:25,q:'当前最大的阻塞点是什么？能否在今天内解决？',p:'阻塞识别与清除'},
+    ],
+    '每周进度':[
+      {id:26,q:'本周里程碑能否按时完成？如果不能需要砍掉什么？',p:'进度-范围权衡'},
+      {id:27,q:'是否在高价值事情上花了足够时间，还是被琐事占据？',p:'精力分配检视'},
+      {id:28,q:'过去一周时间都花在哪里？哪些可以优化/自动化？',p:'效率复盘'},
+    ],
+    '质量检查':[
+      {id:29,q:'刚完成的模块有没有遗漏边界情况？',p:'自测覆盖率检查'},
+      {id:30,q:'核心功能的测试覆盖率达到多少？关键路径全部覆盖？',p:'测试完整性'},
+      {id:31,q:'有没有产生技术债务？计划什么时候还？',p:'债务管理'},
+      {id:32,q:'用户测试反馈中重复出现的问题是什么？',p:'反馈模式识别'},
+      {id:33,q:'有没有因为赶进度而牺牲了质量标准？',p:'质量红线自检'},
+    ],
+    '外部视野':[
+      {id:34,q:'最近一周竞争对手/行业有没有发布新动态？',p:'竞争态势感知'},
+      {id:35,q:'技术社区有没有出现能提升效率的新工具？',p:'工具迭代机会'},
+      {id:36,q:'有没有读到让方向需要微调的文章或讨论？',p:'方向校准信号'},
+      {id:37,q:'如果现在重新选技术栈，还会选同样的吗？',p:'技术决策复盘'},
+    ]
+  }},
+  phase4: { name:'第四阶段：复盘沉淀', icon:'📊', goal:'经验变成可复用资产', badge:'badge4', sections:{
+    '结果复盘':[
+      {id:38,q:'项目目标达成了吗？偏差多少？为什么？',p:'目标达成率评估'},
+      {id:39,q:'哪些做对了可复用？哪些做错了要避免？',p:'经验资产化'},
+      {id:40,q:'实际花费 vs 预估时间，偏差最大的环节是什么？',p:'估算能力校准'},
+      {id:41,q:'用户反馈中超出预期和低于预期的分别是什么？',p:'真实效果验证'},
+      {id:42,q:'这个项目值不值得做V2.0？依据是什么？',p:'续投决策'},
+    ],
+    '知识沉淀':[
+      {id:43,q:'沉淀了哪些可复用的代码/模板/流程？',p:'资产化输出'},
+      {id:44,q:'踩了哪些坑？写下来，下次怎么绕开？',p:'踩坑记录'},
+      {id:45,q:'Prompt库/工具链有没有因为这次项目而升级？',p:'能力体系迭代'},
+      {id:46,q:'如果让别人来做，最想告诉他的一句话是什么？',p:'核心经验提炼'},
+    ]
+  }},
+  phase5: { name:'第五阶段：视野跟踪', icon:'🔭', goal:'避免「闭门造车」', badge:'badge5', sections:{
+    '技术趋势':[
+      {id:47,q:'本周GitHub Trending上领域相关的热门项目有哪些？',p:'开发者生态信号'},
+      {id:48,q:'有没有新出的AI工具/模型能替代当前工作环节？',p:'AI赋能机会'},
+      {id:49,q:'主流技术框架/平台有没有发布重要更新？',p:'底层变动预警'},
+      {id:50,q:'行业头部企业在做什么？关注的方向是什么？',p:'行业风向标'},
+      {id:51,q:'是否存在回音壁效应？有没有读反对既有观点的内容？',p:'认知破圈自检'},
+    ],
+    '市场信号':[
+      {id:52,q:'目标用户社区最近在讨论什么新问题/新需求？',p:'需求动态感知'},
+      {id:53,q:'有没有出现新的竞品或替代方案？',p:'竞争动态监控'},
+      {id:54,q:'用户评价中哪些词出现频率最高？',p:'口碑词云分析'},
+      {id:55,q:'打分7分的人差的那3分是什么？',p:'改进方向挖掘'},
+    ]
+  }}
+};
+
+const STORAGE_KEY = 'pm_dashboard_data';
+let appData = loadData();
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Merge with default structure to handle schema changes
+      const merged = {};
+      for (const [phaseKey, phaseData] of Object.entries(PHASES)) {
+        merged[phaseKey] = {};
+        for (const items of Object.values(phaseData.sections)) {
+          for (const item of items) {
+            merged[phaseKey][item.id] = (parsed[phaseKey] && parsed[phaseKey][item.id]) || { checked: false, note: '' };
+          }
+        }
+      }
+      return merged;
+    }
+  } catch(e) { /* localStorage 读取失败，静默使用默认值 */ }
+  const fresh = {};
+  for (const [phaseKey, phaseData] of Object.entries(PHASES)) {
+    fresh[phaseKey] = {};
+    for (const items of Object.values(phaseData.sections)) {
+      for (const item of items) {
+        fresh[phaseKey][item.id] = { checked: false, note: '' };
+      }
+    }
+  }
+  return fresh;
+}
+
+function saveData() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+  updateStats();
+}
+
+function getCheckedCount(phaseKey) {
+  let count = 0;
+  if (!appData[phaseKey]) return 0;
+  for (const v of Object.values(appData[phaseKey])) {
+    if (v.checked) count++;
+  }
+  return count;
+}
+
+function getTotalCount(phaseKey) {
+  let count = 0;
+  for (const items of Object.values(PHASES[phaseKey].sections)) {
+    count += items.length;
+  }
+  return count;
+}
+
+function getPhaseProgress(phaseKey) {
+  const total = getTotalCount(phaseKey);
+  const checked = getCheckedCount(phaseKey);
+  return { checked, total, pct: total ? Math.round(checked/total*100) : 0 };
+}
+
+function updateStats() {
+  let totalChecked = 0, totalAll = 0;
+  for (const phaseKey of Object.keys(PHASES)) {
+    totalChecked += getCheckedCount(phaseKey);
+    totalAll += getTotalCount(phaseKey);
+  }
+  document.getElementById('checkedCount').textContent = totalChecked;
+  document.getElementById('progressPercent').textContent = totalAll ? Math.round(totalChecked/totalAll*100)+'%' : '0%';
+  document.getElementById('overallProgressBar').style.width = totalAll ? (totalChecked/totalAll*100)+'%' : '0%';
+  document.getElementById('overallProgressText').textContent = `${totalChecked}/${totalAll} (${totalAll?Math.round(totalChecked/totalAll*100):0}%)`;
+
+  // Update phase progress dots
+  const phaseOrder = ['phase1','phase2','phase3','phase4','phase5'];
+  let lastDone = -1;
+  phaseOrder.forEach((pk, i) => {
+    const p = getPhaseProgress(pk);
+    if (p.pct === 100) lastDone = i;
+  });
+  const dots = document.querySelectorAll('.phase-dot');
+  const lines = document.querySelectorAll('.phase-line');
+  dots.forEach((dot, i) => {
+    dot.classList.remove('active','done');
+    const p = getPhaseProgress(phaseOrder[i]);
+    if (p.pct === 100) { dot.classList.add('done'); }
+    else if (i === lastDone + 1 || (lastDone === -1 && i === 0)) {
+      dot.classList.add('active');
+    }
+  });
+  lines.forEach((line, i) => {
+    const p = getPhaseProgress(phaseOrder[i]);
+    const pn = getPhaseProgress(phaseOrder[i+1]);
+    if (p && pn && p.pct === 100 && pn.pct === 100) {
+      line.classList.add('done');
+    } else {
+      line.classList.remove('done');
+    }
+  });
+
+  // Update badges
+  for (const [pk, phase] of Object.entries(PHASES)) {
+    const badge = document.getElementById(phase.badge);
+    if (!badge) continue;
+    const p = getPhaseProgress(pk);
+    if (p.pct === 100) { badge.textContent = '✓ 完成'; badge.className = 'nav-badge ok'; }
+    else if (p.pct > 0) { badge.textContent = p.pct+'%'; badge.className = 'nav-badge warn'; }
+    else { badge.textContent = '待开始'; badge.className = 'nav-badge pending'; }
+  }
+
+  // Determine current phase
+  let curPhase = '阶段一';
+  for (const pk of phaseOrder) {
+    const p = getPhaseProgress(pk);
+    if (p.pct < 100) { curPhase = PHASES[pk].name.replace(/第[一二三四五]阶段：/, '阶段'); break; }
+  }
+  document.getElementById('currentPhase').textContent = curPhase;
+
+  // Update summary
+  updateSummaryPanel();
+}
+
+// ==================== RENDER ====================
+let activePanel = 'summary';
+
+function renderAllPanels() {
+  const contentArea = document.getElementById('contentArea');
+  // Remove old phase panels
+  contentArea.querySelectorAll('.panel:not(#panel-summary)').forEach(el => el.remove());
+
+  // Render phase panels
+  for (const [phaseKey, phaseData] of Object.entries(PHASES)) {
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.id = 'panel-'+phaseKey;
+    const progress = getPhaseProgress(phaseKey);
+
+    let html = `<h2>${phaseData.icon} ${phaseData.name}</h2>`;
+    html += `<p class="subtitle">目标：${phaseData.goal}</p>`;
+    html += `<div class="section-progress"><div class="progress-bar"><div class="progress-fill" style="width:${progress.pct}%"></div></div><span class="progress-text">${progress.checked}/${progress.total} (${progress.pct}%)</span></div>`;
+
+    for (const [sectionName, items] of Object.entries(phaseData.sections)) {
+      html += `<div class="section"><h3>${sectionName}</h3><div class="checklist">`;
+      for (const item of items) {
+        const state = (appData[phaseKey] && appData[phaseKey][item.id]) || { checked: false, note: '' };
+        html += `<div class="check-item${state.checked?' checked':''}" data-phase="${phaseKey}" data-id="${item.id}">`;
+        html += `<input type="checkbox" id="chk_${item.id}" ${state.checked?'checked':''} onchange="toggleCheck('${phaseKey}',${item.id},this.checked)">`;
+        html += `<div><label for="chk_${item.id}">${item.q}</label><div class="purpose">目的：${item.p}</div>`;
+        html += `<textarea placeholder="记录你的思考..." onchange="updateNote('${phaseKey}',${item.id},this.value)" onblur="updateNote('${phaseKey}',${item.id},this.value)">${escapeHtml(state.note)}</textarea></div>`;
+        html += `</div>`;
+      }
+      html += `</div></div>`;
+    }
+
+    // Phase 1: Decision Matrix
+    if (phaseKey === 'phase1') {
+      html += `<div class="section"><h3>📋 决策矩阵</h3>
+        <table class="matrix-table">
+          <tr><th>维度</th><th>得分(1-5)</th><th>说明</th></tr>
+          <tr><td>需求真实性</td><td><input type="number" min="1" max="5" id="score1_1" value="3" onchange="updateScore()"></td><td><input id="desc1_1" placeholder="说明..."></td></tr>
+          <tr><td>市场空间</td><td><input type="number" min="1" max="5" id="score1_2" value="3" onchange="updateScore()"></td><td><input id="desc1_2" placeholder="说明..."></td></tr>
+          <tr><td>资源匹配度</td><td><input type="number" min="1" max="5" id="score1_3" value="3" onchange="updateScore()"></td><td><input id="desc1_3" placeholder="说明..."></td></tr>
+          <tr><td>风险可控性</td><td><input type="number" min="1" max="5" id="score1_4" value="3" onchange="updateScore()"></td><td><input id="desc1_4" placeholder="说明..."></td></tr>
+        </table>
+        <div class="score-display"><div class="score-circle" id="totalScore">12</div><div class="score-info"><strong id="scoreVerdict">综合评估</strong><br>≥15启动 | 10-14补充调研 | &lt;10暂缓</div></div>
+      </div>`;
+    }
+
+    // Phase 2: Milestones
+    if (phaseKey === 'phase2') {
+      html += `<div class="section"><h3>📅 里程碑计划</h3>
+        <table class="matrix-table">
+          <tr><th>里程碑</th><th>目标日期</th><th>交付物</th><th>验收标准</th></tr>
+          <tr><td><input value="M1: 基础搭建"></td><td><input type="date"></td><td><input></td><td><input></td></tr>
+          <tr><td><input value="M2: 核心功能"></td><td><input type="date"></td><td><input></td><td><input></td></tr>
+          <tr><td><input value="M3: 集成测试"></td><td><input type="date"></td><td><input></td><td><input></td></tr>
+          <tr><td><input value="M4: MVP发布"></td><td><input type="date"></td><td><input></td><td><input></td></tr>
+        </table>
+      </div>`;
+    }
+
+    panel.innerHTML = html;
+    contentArea.appendChild(panel);
+  }
+
+  updateStats();
+  switchPanel('summary');
+}
+
+function updateSummaryPanel() {
+  const grid = document.getElementById('summaryGrid');
+  let html = '';
+  for (const [pk, phase] of Object.entries(PHASES)) {
+    const p = getPhaseProgress(pk);
+    html += `<div class="summary-card" style="cursor:pointer" onclick="switchPanel('${pk}')">
+      <div class="num" style="color:${p.pct===100?'var(--success)':p.pct>0?'var(--warning)':'var(--text-muted)'}">${p.checked}/${p.total}</div>
+      <div class="lbl">${phase.name}</div>
+    </div>`;
+  }
+  grid.innerHTML = html;
+
+  const details = document.getElementById('summaryDetails');
+  details.innerHTML = `<h3>阶段详情</h3>` + Object.entries(PHASES).map(([pk, phase]) => {
+    const p = getPhaseProgress(pk);
+    return `<div class="section-progress" style="margin-bottom:6px">
+      <span style="font-size:.8rem;min-width:120px">${phase.icon} ${phase.name.replace('第','').replace('阶段','阶段')}</span>
+      <div class="progress-bar"><div class="progress-fill" style="width:${p.pct}%;background:${p.pct===100?'var(--success)':'var(--primary)'}"></div></div>
+      <span class="progress-text">${p.pct}%</span>
+    </div>`;
+  }).join('');
+}
+
+function switchPanel(panelName) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const panel = document.getElementById('panel-' + panelName);
+  if (panel) panel.classList.add('active');
+  const navBtn = document.querySelector(`[data-panel="${panelName}"]`);
+  if (navBtn) navBtn.classList.add('active');
+  activePanel = panelName;
+}
+
+function escapeHtml(str) { return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ==================== ACTIONS ====================
+function toggleCheck(phaseKey, id, checked) {
+  if (!appData[phaseKey][id]) appData[phaseKey][id] = { checked: false, note: '' };
+  appData[phaseKey][id].checked = checked;
+  saveData();
+  // Update visual
+  const item = document.querySelector(`.check-item[data-phase="${phaseKey}"][data-id="${id}"]`);
+  if (item) {
+    if (checked) item.classList.add('checked');
+    else item.classList.remove('checked');
+  }
+  updateStats();
+}
+
+function updateNote(phaseKey, id, value) {
+  if (!appData[phaseKey][id]) appData[phaseKey][id] = { checked: false, note: '' };
+  appData[phaseKey][id].note = value;
+  saveData();
+}
+
+function updateScore() {
+  let total = 0;
+  for (let i = 1; i <= 4; i++) {
+    const el = document.getElementById('score1_'+i);
+    if (el) total += parseInt(el.value) || 0;
+  }
+  document.getElementById('totalScore').textContent = total;
+  const verdict = document.getElementById('scoreVerdict');
+  if (total >= 15) verdict.textContent = '✅ 建议启动 (≥15)';
+  else if (total >= 10) verdict.textContent = '⚠️ 需补充调研 (10-14)';
+  else verdict.textContent = '❌ 建议暂缓 (<10)';
+}
+
+function navigateToPhase(n) {
+  switchPanel('phase'+n);
+  document.getElementById('phase'+n).scrollIntoView({ behavior: 'smooth' });
+}
+
+function exportData() {
+  const blob = new Blob([JSON.stringify(appData, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'project-manager-data-' + new Date().toISOString().slice(0,10) + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('数据已导出 ✅');
+}
+
+function importDataPrompt() {
+  document.getElementById('importModal').classList.add('show');
+}
+
+function closeImportModal() {
+  document.getElementById('importModal').classList.remove('show');
+}
+
+function importData() {
+  try {
+    const raw = document.getElementById('importTextarea').value;
+    const imported = JSON.parse(raw);
+    // Merge with existing
+    for (const [phaseKey, phaseData] of Object.entries(imported)) {
+      if (!appData[phaseKey]) continue;
+      for (const [idStr, state] of Object.entries(phaseData)) {
+        appData[phaseKey][idStr] = state;
+      }
+    }
+    saveData();
+    closeImportModal();
+    renderAllPanels();
+    showToast('数据导入成功 ✅');
+  } catch(e) {
+    showToast('导入失败：数据格式不正确 ❌');
+  }
+}
+
+function resetAll() {
+  if (!confirm('确定要重置所有数据吗？此操作不可撤销！')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  appData = loadData();
+  renderAllPanels();
+  showToast('数据已重置 🔄');
+}
+
+function showToast(msg) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2000);
+}
+
+// ==================== NAV ====================
+document.getElementById('navList').addEventListener('click', function(e) {
+  const btn = e.target.closest('.nav-item');
+  if (!btn) return;
+  const panelName = btn.dataset.panel;
+  if (panelName) switchPanel(panelName);
+});
+
+document.getElementById('phaseProgress').addEventListener('click', function(e) {
+  const dot = e.target.closest('.phase-dot');
+  if (!dot) return;
+  const n = dot.dataset.phase;
+  if (n) switchPanel('phase'+n);
+});
+
+// ==================== INIT ====================
+renderAllPanels();
+updateScore();
+</script>
+</body>
+</html>

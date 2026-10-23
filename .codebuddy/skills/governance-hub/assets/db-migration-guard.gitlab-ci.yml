@@ -1,0 +1,70 @@
+# =============================================================================
+# D10 数据库迁移守卫 — 回滚检测 + 危险 SQL 拦截（GitLab CI 模板，全体量必做，ROI P0）
+# 依据：GitLab 2017 删库（B-2，高度可信）、PocketOS 9秒删库（B-3，已验证）、
+#       sql-sop E001/E002（B-11）、pytest-mrt（B-10）、Semgrep TRUNCATE（B-13）
+# 逻辑：空 downgrade = 无后悔药 = 阻断；危险 DDL = 转人工审批
+# =============================================================================
+
+variables:
+  MIGRATIONS_DIR: 'alembic/versions'     # 迁移脚本目录（Flyway 场景改为 sql/ 并调整段 1 逻辑）
+
+# ---- 段 1：空 downgrade 检测（复用基座报告附录 A10 逻辑）----
+check-downgrade:
+  stage: test
+  image: alpine:latest
+  script:
+    - EMPTY_DOWNGRADE=0
+    - |
+      for f in $MIGRATIONS_DIR/*.py; do
+        [ -e "$f" ] || continue
+        # 提取 downgrade 函数体，若仅含 pass/.../return 则判定为空回滚
+        if awk '/def downgrade/{flag=1;next}/def upgrade|def [a-z]/{flag=0}flag' "$f" \
+           | grep -Eq '^\s*(pass|\.\.\.|return)\s*$'; then
+          echo "ERROR: $f 存在空 downgrade()——迁移不可回滚"; EMPTY_DOWNGRADE=1
+        fi
+      done
+      if [ "$EMPTY_DOWNGRADE" = "1" ]; then
+        echo "每个迁移必须实现真实 downgrade；参考 GitLab 2017 删库事故教训"; exit 1
+      fi
+      echo "全部迁移脚本 downgrade 检测通过"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - $MIGRATIONS_DIR/**/*
+
+# ---- 段 2：危险 SQL 静态扫描（sql-sop + Semgrep，无容器也可改用 pip 安装）----
+dangerous-sql-scan:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - pip install sql-sop semgrep
+    # E001 delete-without-where / E002 drop-without-if-exists（B-11）
+    - sql-sop scan $MIGRATIONS_DIR/ --rules E001,E002 --exit-code 1
+    # TRUNCATE / CASCADE 检测（B-12/B-13 规则内联，免网络拉取）
+    - |
+      semgrep scan --config=p/sql-injection --error --no-git-ignore \
+        --pattern-regex '(?i)TRUNCATE\s+(TABLE\s+)?[\w."]+(\s+CASCADE)?' \
+        $MIGRATIONS_DIR/ || { echo "检测到 TRUNCATE：迁移脚本禁止清表操作"; exit 1; }
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - $MIGRATIONS_DIR/**/*
+
+# ---- 段 3：危险 DDL 人工审批入口（DROP/ALTER 大表变更强制人工确认）----
+dangerous-ddl-manual-approval:
+  stage: deploy
+  image: alpine:latest
+  script:
+    - grep -rEl '(?i)DROP\s+(?!IF\s+EXISTS)|ALTER\s+TABLE\s+\S+\s+DROP\s+COLUMN' $MIGRATIONS_DIR/ \
+      && echo "存在高危 DDL，必须由 DBA 人工审批后继续" || echo "无高危 DDL"
+  when: manual                    # 手动 gate：点击后才放行后续部署
+  allow_failure: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# =============================================================================
+# GitHub Actions 对照：
+#   - run: pip install sql-sop && sql-sop scan alembic/versions/ --rules E001,E002 --exit-code 1
+#   - run: bash scripts/check-downgrade.sh   # 同段 1 的 awk 逻辑，已含在基座附录 A10
+# 可选增强（大型体量）：pytest-mrt（B-10）在测试阶段实际执行 downgrade 重放验证
+# =============================================================================

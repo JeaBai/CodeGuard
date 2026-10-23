@@ -1,0 +1,46 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "description": "Governance Hub 设计意图保护数据存储 — 记录用户已确认为有意设计的代码模式，防止 CodeGuard 误报。与 tag_manager.py 的标签系统协同工作。",
+    "last_updated": "2025-08-02",
+    "auto_expire_check": "每次 check_protected() 调用时自动检测过期项并更新 status"
+  },
+
+  "protected_items": [
+    {
+      "id": "PROT-001",
+      "file": "src/legacy/payment_adapter.py",
+      "function": "process_legacy_response",
+      "line_range": [45, 425],
+      "code_smell": "函数 380 行，圈复杂度 22",
+      "reason": "兼容老支付网关的 14 种异常响应格式，每种都是特殊 case",
+      "decision": "禁止拆分，只能加注释。等支付网关迁移完成后整体删除",
+      "protected_tags": ["no_split", "legacy"],
+      "protected_by": "示例用户",
+      "created_at": "2025-01-15T10:00:00Z",
+      "expires": "2026-12-31",
+      "status": "active",
+      "action": "skip",
+      "suppress_rules": ["GOLD_NO_PRINT_PRODUCTION", "GOLD_NO_GLOBAL_STATE"],
+      "notes": "示例保护项，展示完整字段结构。实际使用时请根据项目情况添加。"
+    }
+  ],
+
+  "_field_reference": {
+    "id": "自动生成的唯一标识 (PROT-001, PROT-002, ...)",
+    "file": "受保护的源文件路径（相对于项目根目录）",
+    "function": "受保护的函数/方法名（可选，空字符串表示文件级保护）",
+    "line_range": "[start_line, end_line] — 受保护的行范围（包含两端）",
+    "code_smell": "被检测到的代码异味描述（如 '函数380行'、'圈复杂度22'）",
+    "reason": "保护原因 — 为什么这是有意设计",
+    "decision": "团队决策 — 如何处理该代码（如 '禁止拆分'、'等待迁移后删除'）",
+    "protected_tags": "关联的 tag_manager 标签列表",
+    "protected_by": "创建者/审批者用户名",
+    "created_at": "ISO8601 创建时间",
+    "expires": "ISO8601 日期或日期时间 — 过期后保护自动失效",
+    "status": "active | expired | revoked",
+    "action": "CodeGuard 集成动作 — skip | downgrade_to_info | report_with_note",
+    "suppress_rules": "被抑制的 CodeGuard 规则 ID 列表（可选）",
+    "notes": "自由文本备注"
+  }
+}

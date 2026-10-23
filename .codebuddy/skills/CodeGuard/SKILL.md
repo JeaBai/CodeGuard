@@ -1,5 +1,5 @@
 ---
-name: CodeGuard
+name: codeguard
 description: "防止 AI 生成代码沦为\"死山代码\"的质量守护 Skill / MCP Server (v3.1.0)。 三层防线：生成前自动注入架构约束、生成中自查、生成后质量门禁检查；支持 CodeBuddy Skill 模式 + MCP 协议跨平台模式 (Claude Code/Cursor/VS Code)。 检测圈复杂度、重复代码、架构分层违规、循环依赖、安全漏洞、错误处理完整性。 行业规则集自动切换（Web/云、嵌入式、安全关键）；C 方言自动分流（通用 C/C++ 与嵌入式 C：MISRA/ISR/volatile/栈深度）。 输出置信度评分。 当用户请求生成/修改/重构代码，或提及代码质量、架构、技术债，或需要规范模块化与接口设计、降低模块耦合、检查跨模块调用是否可稳定、维护模块索引、接口契约与版本管理、依赖锁定与可复现构建、避免死山代码时应触发。 专注于应用层代码质量与安全（基础设施级 IaC 安全由 iac-guardian 处理）。 基于实证研究设计 (GitClear 2025, Sonar 2026, DORA 2024, CodeRabbit 2025, Veracode 2025)。"
 agent_created: true
 ---

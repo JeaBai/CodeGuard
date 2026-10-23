@@ -1,0 +1,87 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "description": "Governance Hub 三级风险门禁配置 — 定义每种重构操作的风险等级和门禁策略。与 risk_gate.py 配合使用。",
+    "last_updated": "2025-08-02"
+  },
+
+  "auto_approve": {
+    "description": "🟢 低风险 — 自动执行",
+    "rules": [
+      {"action": "add_type_annotation", "risk": "low"},
+      {"action": "remove_unused_import", "risk": "low"},
+      {"action": "remove_unused_variable", "risk": "low"},
+      {"action": "fix_import_sort", "risk": "low"},
+      {"action": "replace_magic_number", "risk": "low"},
+      {"action": "add_comment", "risk": "low"},
+      {"action": "add_docstring", "risk": "low"},
+      {"action": "rename_local_variable", "risk": "low"},
+      {"action": "add_logging", "risk": "low"},
+      {"action": "format_code", "risk": "low"}
+    ],
+    "gate": "自动执行 → 跑测试 → 通过则合并"
+  },
+
+  "confirm_required": {
+    "description": "🟡 中风险 — 人话确认后执行",
+    "rules": [
+      {"action": "split_function", "risk": "medium"},
+      {"action": "extract_duplicate_code", "risk": "medium"},
+      {"action": "refactor_error_handling", "risk": "medium"},
+      {"action": "reduce_nesting", "risk": "medium"},
+      {"action": "change_implementation", "risk": "medium"},
+      {"action": "extract_shared_util", "risk": "medium"},
+      {"action": "optimize_complexity", "risk": "medium"},
+      {"action": "rename_function", "risk": "medium"},
+      {"action": "reorder_parameters", "risk": "medium"},
+      {"action": "inline_variable", "risk": "medium"}
+    ],
+    "gate": "人话说明 → 用户确认 → AI 执行 → 回检"
+  },
+
+  "manual_required": {
+    "description": "🔴 高风险 — 必须人工审查",
+    "rules": [
+      {"action": "split_module", "risk": "high"},
+      {"action": "merge_modules", "risk": "high"},
+      {"action": "change_public_api", "risk": "high"},
+      {"action": "database_schema_change", "risk": "high"},
+      {"action": "security_config_change", "risk": "high"},
+      {"action": "cross_module_dependency_change", "risk": "high"},
+      {"action": "delete_file", "risk": "high"},
+      {"action": "move_file", "risk": "high"},
+      {"action": "add_dependency", "risk": "high"},
+      {"action": "remove_dependency", "risk": "high"},
+      {"action": "global_var_change", "risk": "high"},
+      {"action": "delete_function", "risk": "high"}
+    ],
+    "gate": "生成方案 → diff 预览 → 人工逐项确认"
+  },
+
+  "escalation_rules": {
+    "description": "风险等级自动升级规则",
+    "impact_count_threshold": {
+      "from_low_to_medium": 3,
+      "from_medium_to_high": 10
+    },
+    "protected_file": {
+      "action": "escalate_to_high",
+      "reason": "文件被 intent_protection 保护，风险自动升级为 high"
+    },
+    "locked_file": {
+      "action": "reject",
+      "reason": "文件被 refactor_queue 锁定，拒绝执行"
+    },
+    "tag_forbidden": {
+      "action": "reject",
+      "reason_prefix": "模块标签禁止此操作"
+    }
+  },
+
+  "confirmation_template": {
+    "prefix": "你的「{module}」模块有一段 {line_count} 行的函数 `{function}`。",
+    "suggestion": "建议拆成 {target_count} 个小函数：{targets}。",
+    "verification": "拆分后行为不变，测试全通过。",
+    "actions": "[同意] [拒绝] [查看详情]"
+  }
+}

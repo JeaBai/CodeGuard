@@ -1,0 +1,62 @@
+# =============================================================================
+# D12 变更传播 — OpenAPI 契约破坏性变更检测（GitLab CI 模板）
+# 依据：oasdiff 官方（B-21/B-22，高度可信）；Terrateam GitHub API 静默变更事故（B-20，已验证）
+# 目标：任何 API 破坏性变更必须 ①CI 阻断 ②自动 @ 下游团队 ③留痕变更通告
+# =============================================================================
+
+variables:
+  OPENAPI_SPEC: 'openapi.yaml'          # 契约文件路径
+  FAIL_ON: 'WARN'                        # ERR=仅错误阻断 / WARN=警告也阻断（成长型建议 WARN）
+
+# ---- 段 1：破坏性变更检测（oasdiff 容器版，无需安装）----
+openapi-breaking-check:
+  stage: test
+  image:
+    name: tufin/oasdiff:latest
+    entrypoint: [""]
+  script:
+    - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME --depth=100
+    # 对比目标分支与当前 HEAD 的契约差异；breaking 子命令仅报破坏性变更
+    - |
+      oasdiff breaking \
+        "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME:$OPENAPI_SPEC" \
+        "$OPENAPI_SPEC" \
+        --fail-on "$FAIL_ON" --format text | tee oasdiff-report.txt
+  artifacts:
+    when: always
+    paths: [oasdiff-report.txt]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - $OPENAPI_SPEC
+
+# ---- 段 2：破坏性变更存在时自动 @ 下游团队（GitLab MR 讨论）----
+# DOWNSTREAM_TEAMS 变量示例："@team-order @team-billing @team-mobile"
+openapi-notify-downstream:
+  stage: test
+  image: alpine/curl:latest
+  needs: ["openapi-breaking-check"]
+  script:
+    - |
+      if grep -qE "BREAKING|breaking" oasdiff-report.txt; then
+        BODY=$(cat oasdiff-report.txt | head -50 | sed 's/"/\\"/g' | tr '\n' ' ')
+        curl --request POST --header "PRIVATE-TOKEN: $GITLAB_API_TOKEN" \
+          --header "Content-Type: application/json" \
+          --data "{\"body\": \"⚠️ **检测到 API 破坏性变更** $DOWNSTREAM_TEAMS\n请评估对下游的影响并在合并前确认：\n\`\`\`\n${BODY}\n\`\`\`\"}" \
+          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/discussions"
+      fi
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - $OPENAPI_SPEC
+
+# =============================================================================
+# GitHub Actions 对照（使用官方 oasdiff-action，B-21）：
+#   - uses: oasdiff/oasdiff-action/breaking@v0
+#     with:
+#       base: 'origin/main:openapi.yaml'
+#       revision: 'HEAD:openapi.yaml'
+#       fail-on: WARN
+#   下游通知可用 mshick/add-pr-comment（B-26）在 PR 评论中 @ 下游团队
+# 补充：release-please（B-23）负责自动 Release Notes；LLM 业务版说明见 governance-hub
+# =============================================================================

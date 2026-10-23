@@ -1,0 +1,110 @@
+# ──────────────────────────────────────────────────────
+# iac-guardian CI 门禁 — GitHub Actions 集成模板
+# 用途：Pull Request 触发时自动扫描 IaC 变更文件
+# 放置：.github/workflows/codeguard-iac-gate.yml
+# ──────────────────────────────────────────────────────
+
+name: iac-guardian 门禁
+
+on:
+  pull_request:
+    paths:
+      - '**/*.tf'
+      - '**/*.tfvars'
+      - '**/*.yaml'
+      - '**/*.yml'
+      - 'k8s/**'
+      - 'infra/**'
+      - 'terraform/**'
+  push:
+    paths:
+      - '**/*.tf'
+      - '**/*.yaml'
+      - 'k8s/**'
+      - 'infra/**'
+      - 'terraform/**'
+
+jobs:
+  constraint-check:
+    name: 约束注入检视
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 生成 IaC 安全约束文本
+        run: |
+          python .codebuddy/skills/iac-guardian/scripts/constraint_injector.py \
+            --target all --format text > iac_constraints.txt
+          echo "已生成 $(wc -l < iac_constraints.txt) 行 IaC 约束"
+
+      - name: 约束内容校验
+        run: |
+          if grep -q "C-IAC-001" iac_constraints.txt && \
+             grep -q "C-IAC-101" iac_constraints.txt; then
+            echo "约束注入结果: TF + K8s 约束均已注入"
+          else
+            echo "::warning::约束注入不完整，请检查 constraint_injector.py"
+          fi
+
+      - name: 上传约束文本
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iac-constraints
+          path: iac_constraints.txt
+          retention-days: 7
+
+  iac-scan:
+    name: IaC 安全与配额扫描
+    runs-on: ubuntu-latest
+    needs: [constraint-check]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 运行 iac_scan.py
+        id: iac_scan
+        run: |
+          python .codebuddy/skills/iac-guardian/scripts/iac_scan.py \
+            --path . \
+            --format json > iac_result.json
+
+          # 提取退出码
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+
+          # 提取摘要
+          python -c "
+          import json
+          with open('iac_result.json') as f:
+              d = json.load(f)
+          print(f'IaC 扫描: {d[\"summary\"][\"total\"]} 问题 / {d[\"summary\"][\"blocks\"]} BLOCK / {d[\"summary\"][\"warnings\"]} WARN')
+          "
+
+      - name: 上传扫描报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iac-scan-report
+          path: iac_result.json
+          retention-days: 30
+
+      - name: 阻断检查
+        if: steps.iac_scan.outputs.exit_code == '2'
+        run: |
+          echo "::error::IaC 扫描检测到 BLOCK 级别问题，合并被阻断"
+          python -c "
+          import json
+          with open('iac_result.json') as f:
+              d = json.load(f)
+          blocks = [i for i in d['issues'] if i['severity'] == 'block']
+          for b in blocks:
+              print(f'[BLOCK] {b[\"rule\"]} {b[\"file\"]}:{b[\"line\"]}')
+              print(f'        {b[\"message\"]}')
+              print(f'        修复: {b[\"suggestion\"]}')
+          "
+          exit 1
+
+      - name: WARN 汇总
+        if: steps.iac_scan.outputs.exit_code == '1'
+        run: |
+          echo "::warning::IaC 扫描检测到 WARN 级别问题，请人工确认"

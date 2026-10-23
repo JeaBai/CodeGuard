@@ -1,0 +1,83 @@
+# ──────────────────────────────────────────────────────
+# governance-hub CI 门禁 — GitHub Actions 集成模板
+# 用途：PR/MR 触发时执行治理四合一检视
+# 放置：.github/workflows/governance-gate.yml
+# ──────────────────────────────────────────────────────
+
+name: Governance Hub 发布治理门禁
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - release/*
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
+      - master
+      - release/*
+
+jobs:
+  governance-gate:
+    name: 治理四合一检视
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装 infracost（成本检视工具）
+        run: |
+          curl -fsSL https://get.infracost.io | sh
+          echo "$HOME/.infracost/bin" >> $GITHUB_PATH
+
+      - name: 安装 oasdiff（契约破坏性检测）
+        run: |
+          go install github.com/tufin/oasdiff/cmd/oasdiff@latest
+
+      - name: 自动需求追溯（D9 增强）
+        id: auto-trace
+        run: |
+          python .codebuddy/skills/governance-hub/scripts/governance_gate.py \
+            --mode auto-trace \
+            --path . \
+            --format text
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+
+      - name: 全量治理检视
+        if: steps.auto-trace.outputs.exit_code == '0'
+        run: |
+          python .codebuddy/skills/governance-hub/scripts/governance_gate.py \
+            --mode release \
+            --path . \
+            --format text \
+            --cost-threshold 20 \
+            --coverage-ratio 0.8
+          EXIT_CODE=$?
+          if [ "$EXIT_CODE" -eq 2 ]; then
+            echo "❌ 发布治理门禁 BLOCK — 存在阻断性问题"
+            exit 2
+          elif [ "$EXIT_CODE" -eq 1 ]; then
+            echo "⚠️ 发布治理门禁 WARN — 请人工审查"
+          else
+            echo "✅ 发布治理门禁 PASS"
+          fi
+
+      - name: 产生治理态势摘要
+        if: always()
+        run: |
+          echo "## Governance Hub 治理检视报告" >> $GITHUB_STEP_SUMMARY
+          echo "| 检视项 | 维度 | 状态 |" >> $GITHUB_STEP_SUMMARY
+          echo "|:---|:---:|:---:|" >> $GITHUB_STEP_SUMMARY
+          echo "| 自动需求追溯 | D9 | ${{ steps.auto-trace.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 成本基线 | D11 | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 契约破坏性变更 | D12 | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 部署完整性 | D5 | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY

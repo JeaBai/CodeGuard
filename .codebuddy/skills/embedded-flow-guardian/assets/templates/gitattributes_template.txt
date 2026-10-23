@@ -1,0 +1,71 @@
+# ---------------------------------------------------------------------------
+# Git LFS 分类模板（嵌入式项目）
+#
+# 用途：把「大二进制、不可合并」的资产从普通 Git 对象中分离，避免仓库膨胀，
+#       同时保留代码与小文本文件的正常 diff / review 能力。
+#
+# 使用方法：
+#   1. 复制到项目根目录，重命名为 .gitattributes
+#   2. 执行：git lfs install && git lfs track
+#   3. 若此前已提交过大文件，需追溯迁移：git lfs migrate import --include="*.pcbdoc"
+#
+# ⚠️ 关键坑：CI runner 必须先执行 git lfs install，
+#    否则 LFS 文件会被检出为「指针文本」，表现为链接期缺符号。
+#
+# 实测收益参考：某传感器固件团队从共享网盘迁到 Git + LFS + submodule 后，
+#              克隆体积从 1.8GB 降到 45MB。
+# ---------------------------------------------------------------------------
+
+# ---- 硬件设计资产（大二进制、不可合并） ----
+*.SchDoc     filter=lfs diff=lfs merge=lfs -text
+*.PcbDoc     filter=lfs diff=lfs merge=lfs -text
+*.PrjPcb     filter=lfs diff=lfs merge=lfs -text
+*.kicad_sch  filter=lfs diff=lfs merge=lfs -text
+*.kicad_pcb  filter=lfs diff=lfs merge=lfs -text
+*.brd        filter=lfs diff=lfs merge=lfs -text
+*.sch        filter=lfs diff=lfs merge=lfs -text
+*.step       filter=lfs diff=lfs merge=lfs -text
+*.stp        filter=lfs diff=lfs merge=lfs -text
+*.stl        filter=lfs diff=lfs merge=lfs -text
+*.f3d        filter=lfs diff=lfs merge=lfs -text
+
+# ---- 制造与装配文件 ----
+*.gerber     filter=lfs diff=lfs merge=lfs -text
+*.gbr        filter=lfs diff=lfs merge=lfs -text
+*.drl        filter=lfs diff=lfs merge=lfs -text
+*.zip        filter=lfs diff=lfs merge=lfs -text
+
+# ---- 固件产物（若需入库归档；更推荐用 CI 制品库而非仓库） ----
+*.hex        filter=lfs diff=lfs merge=lfs -text
+*.bin        filter=lfs diff=lfs merge=lfs -text
+*.elf        filter=lfs diff=lfs merge=lfs -text
+*.axf        filter=lfs diff=lfs merge=lfs -text
+*.s19        filter=lfs diff=lfs merge=lfs -text
+*.dfu        filter=lfs diff=lfs merge=lfs -text
+*.uf2        filter=lfs diff=lfs merge=lfs -text
+
+# ---- 测试数据（大 CSV：采集数据可放 LFS，但**报告类小 CSV 建议留普通存储**） ----
+*.wav        filter=lfs diff=lfs merge=lfs -text
+*.mp4        filter=lfs diff=lfs merge=lfs -text
+*.bag        filter=lfs diff=lfs merge=lfs -text
+# 说明：采集数据（如 capture_*.csv，数百 KB~数 MB）可按需加入；
+#       追溯矩阵 / 变更日志 / 兼容矩阵等**需要 diff 的小 CSV 不要放 LFS**。
+
+# ---- 明确排除在 LFS 之外（保持可 diff，务必放在显式声明之后） ----
+*.md         -text
+*.txt        -text
+*.c          -text
+*.h          -text
+*.cpp        -text
+RTM.csv      -filter -diff -merge text
+change_log.csv      -filter -diff -merge text
+compat_matrix.csv   -filter -diff -merge text
+
+# ---- 换行统一（跨平台协作） ----
+*.c          text eol=lf
+*.h          text eol=lf
+*.cpp        text eol=lf
+*.py         text eol=lf
+*.sh         text eol=lf
+*.bat        text eol=crlf
+*.uvprojx    text eol=crlf
