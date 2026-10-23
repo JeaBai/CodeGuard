@@ -1,0 +1,59 @@
+# =============================================================================
+# D2 功能测试与覆盖率门禁 — GitLab CI 模板（成长型标准画像；初创仅用 diff-cover 段）
+# 依据：GitLab Coverage reporting 官方文档（A-10，高度可信）、SonarSource 新代码 80% 阈值（A-12，高度可信）
+# 用法：include 本文件或复制对应 job 到 .gitlab-ci.yml；阈值用变量参数化
+# =============================================================================
+
+variables:
+  COVERAGE_REGEX: '/TOTAL\s+\d+\s+\d+\s+(\d+)%/'   # pytest-cov 总覆盖率提取正则（按工具链调整）
+  DIFF_COVER_THRESHOLD: '80'                        # 变更覆盖率阈值（SonarSource 新代码推荐值）
+
+# ---- 段 1：全量测试 + 覆盖率提取（GitLab 原生 coverage 关键字，报告页可视化）----
+unit-test:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - pip install -r requirements.txt pytest pytest-cov
+    # --cov-branch 启用分支覆盖率（Phase 2 起从行覆盖率升级）
+    - pytest --cov=src --cov-branch --cov-report=xml:coverage.xml --cov-report=term --junitxml=report.xml
+  coverage: '$COVERAGE_REGEX'                        # GitLab 自动提取并在 MR 中展示
+  artifacts:
+    when: always
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+      junit: report.xml
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---- 段 2：变更覆盖率门禁（diff-cover，只卡新代码——Sonar "Clean as You Code" 实践）----
+# 初创体量：只保留本段即可（零历史包袱，不考核存量代码）
+diff-coverage-gate:
+  stage: test
+  image: python:3.12-slim
+  needs: ["unit-test"]
+  script:
+    - pip install diff-cover
+    - git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME --depth=100
+    # 变更行覆盖率 < 阈值即失败，并输出可读 HTML 报告
+    - |
+      diff-cover coverage.xml \
+        --compare-branch=origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME \
+        --fail-under=$DIFF_COVER_THRESHOLD \
+        --html-report diff-cover.html || { echo "变更覆盖率未达 ${DIFF_COVER_THRESHOLD}%，请为新增代码补测试"; exit 1; }
+  artifacts:
+    when: on_failure
+    paths: [diff-cover.html]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---- 段 3（大型体量可选）：GitLab Coverage-Check 审批规则 ----
+# 在项目 Settings → Merge requests → Merge checks 启用 "Coverage-Check"，
+# 要求目标分支覆盖率不下降。文档：https://docs.gitlab.com/ci/testing/code_coverage/coverage_reporting/
+# =============================================================================
+# GitHub Actions 对照（简化版）
+#   - run: pytest --cov=src --cov-branch --cov-report=xml
+#   - run: pip install diff-cover && diff-cover coverage.xml --compare-branch=origin/main --fail-under=80
+# =============================================================================

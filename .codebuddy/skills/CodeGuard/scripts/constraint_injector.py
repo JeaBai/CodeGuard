@@ -19,6 +19,9 @@ import os
 import sys
 from pathlib import Path
 
+from internal import rules_loader
+import quality_rule_registry as _registry
+
 
 # ============================================================
 # 常量定义
@@ -146,98 +149,54 @@ def detect_project_structure(root_path):
 # ============================================================
 
 def load_custom_rules(root_path):
-    """加载项目自定义规则（v2.0.9: 模态化消除 depth=7）
+    """加载项目自定义规则（v2.0.11: 使用 internal/rules_loader 消除重复）
     
     支持的配置文件: .code-guardian/rules.json
     不支持的格式 (yaml/toml): 输出警告后跳过
     """
+    root = Path(root_path)
     rules = {"has_custom": False, "rules": []}
-    warned_configs = set()
     
-    config_entries = [
-        (Path(root_path) / ".code-guardian" / "rules.json", "json"),
-        (Path(root_path) / ".code-guardian" / "rules.yaml", "yaml"),
-        (Path(root_path) / ".code-guardian.toml", "toml"),
-    ]
+    data = rules_loader.load_rules_json(root)
+    if data and "rules" in data:
+        rules["has_custom"] = True
+        rules["rules"] = data.get("rules", [])
     
-    for config_path, fmt in config_entries:
-        if fmt == "json":
-            _load_json_rules(config_path, rules)
-        elif fmt in ("yaml", "toml"):
-            _warn_unsupported_format(config_path, warned_configs)
+    # 检查旧版格式并提供迁移提示
+    legacy = rules_loader.check_legacy_rules_formats(root)
+    for path_str in legacy:
+        p = Path(path_str)
+        sys.stderr.write(
+            f"[CodeGuard] ⚠️ 发现 {p.name} 但仅支持 JSON。"
+            f"请转换为 {p.with_suffix('.json')} 格式。\n"
+        )
     
     return rules
-
-
-def _load_json_rules(config_path, rules):
-    """加载 JSON 格式自定义规则（FileNotFoundError 为正常场景）"""
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if "rules" in data:
-            rules["has_custom"] = True
-            rules["rules"] = data["rules"]
-    except FileNotFoundError:
-        pass
-    except json.JSONDecodeError as e:
-        sys.stderr.write(f"[CodeGuard] 自定义规则 JSON 解析失败: {config_path} - {e}\n")
-    except Exception as e:
-        sys.stderr.write(f"[CodeGuard] 加载自定义规则异常: {config_path} - {e}\n")
-
-
-def _warn_unsupported_format(config_path, warned_set):
-    """对不支持的文件格式输出一次性警告"""
-    key = str(config_path)
-    if key in warned_set:
-        return
-    try:
-        file_size = os.path.getsize(config_path)
-        if file_size > 0:
-            sys.stderr.write(
-                f"[CodeGuard] ⚠️ 发现 {config_path.name} 但仅支持 JSON。"
-                f"请转换为 {config_path.with_suffix('.json')} 格式。\n"
-            )
-            warned_set.add(key)
-    except FileNotFoundError:
-        pass
 
 
 # ============================================================
 # 内置规则加载
 # ============================================================
 
-def load_skill_rules():
-    """加载 Skill 内置的通用架构规则（精简版，用于注入到 AI 上下文）"""
-    return [
-        {"id": "SOLID_SRP", "name": "单一职责原则",
-         "description": "类方法数 ≤15，类代码行数 ≤300（警告）/≤500（阻塞）", "severity": "warn"},
-        {"id": "SOLID_DIP", "name": "依赖倒置原则",
-         "description": "Domain 层不得直接 import Infrastructure 层", "severity": "block"},
-        {"id": "LAYER_VIOLATION", "name": "分层架构约束",
-         "description": "Domain → 不可依赖上层；Application → 只能依赖 Domain", "severity": "block"},
-        {"id": "COMPLEXITY_CC", "name": "圈复杂度限制",
-         "description": "CC >10 警告，CC >15 阻塞", "severity": "warn"},
-        {"id": "DUPLICATE_CODE", "name": "重复代码检测",
-         "description": "连续 6 行相同警告，10 行相同阻塞", "severity": "warn"},
-        {"id": "SECURITY_HARDCODED", "name": "禁止硬编码密钥",
-         "description": "禁止在代码中硬编码密码/API Key/Token", "severity": "block"},
-        {"id": "SECURITY_SQL_INJECTION", "name": "SQL注入防护",
-         "description": "必须使用参数化查询，禁止字符串拼接SQL", "severity": "block"},
-        {"id": "SECURITY_COMMAND_INJECTION", "name": "命令注入防护",
-         "description": "禁止 eval/exec/os.system 接受外部输入", "severity": "block"},
-        {"id": "NAMING_CONSISTENCY", "name": "命名一致性",
-         "description": "同一概念使用统一命名，避免 getUserById/fetchUserById 混用", "severity": "info"},
-        {"id": "ERROR_HANDLING", "name": "错误处理完整性",
-         "description": "禁止空 except 块或仅 print(e) 的异常处理", "severity": "warn"},
-    ]
+def load_skill_rules(file_type="source"):
+    """加载 Skill 内置规则（v3.0.0: 从统一注册表读取，支持文件类型差异化）
+
+    file_type 由 FileClassifier 五类（source/test/config/generated/migration/doc）指定，
+    默认 source 返回全部 10 条规则（向后兼容）。
+    """
+    return _registry.get_rules(file_type)
 
 
 # ============================================================
 # Prompt 生成（保持原有逻辑不变）
 # ============================================================
 
-def generate_constraint_prompt(structure, custom_rules, skill_rules):
-    """生成可注入到 AI 对话的约束 Prompt"""
+def generate_constraint_prompt(structure, custom_rules, skill_rules, file_type="source"):
+    """生成可注入到 AI 对话的约束 Prompt（v3.0.0: 清单从注册表动态生成 + 文件类型差异化）
+
+    file_type 由 FileClassifier 五类指定，清单与规则均按文件类型从注册表派生，
+    确保注入约束与生成后门禁规则一致（修复 D1/D2/D3）。
+    """
     
     lines = []
     lines.append("## ⚠️ 架构约束（生成代码前必须遵守）\n")
@@ -275,29 +234,22 @@ def generate_constraint_prompt(structure, custom_rules, skill_rules):
     lines.append("")
     lines.append("### 生成代码检查清单\n")
     lines.append("在输出代码前，确认以下事项：")
-    lines.append("1. [ ] 是否遵循了项目的分层架构？")
-    lines.append("2. [ ] 是否有重复代码可以提取？")
-    lines.append("3. [ ] 圈复杂度是否控制在 10 以内？")
-    lines.append("4. [ ] 是否避免了硬编码密钥/密码？")
-    lines.append("5. [ ] 命名是否与项目现有风格一致？")
-    lines.append("6. [ ] 异常处理是否完善（非空 except/pass）？")
+    for idx, item in enumerate(_registry.get_checklist(file_type), start=1):
+        lines.append(f"{idx}. [ ] {item}")
     
     if structure["has_tests"]:
-        lines.append("7. [ ] 是否需要添加对应的测试？")
+        lines.append(f"{len(_registry.get_checklist(file_type)) + 1}. [ ] 是否需要添加对应的测试？")
     
     return "\n".join(lines)
 
 
-def generate_quick_checklist(structure):
-    """生成轻量级检查清单（用于对话中快速提醒）"""
-    items = [
-        "🏗️ 分层架构：Domain 不依赖 Infrastructure",
-        "📏 圈复杂度：CC ≤ 10",
-        "🔄 避免重复：DRY 原则",
-        "🔒 安全：无硬编码密钥",
-        "📝 命名：与现有风格一致",
-        "🛡️ 错误处理：非空 except",
-    ]
+def generate_quick_checklist(structure, file_type="source"):
+    """生成轻量级检查清单（v3.0.0: 从注册表动态生成，含安全红线）"""
+    items = []
+    for r in _registry.RULE_SPECS:
+        if file_type in r["file_types"]:
+            emoji = _registry.get_category_emoji(r["category"])
+            items.append(f"{emoji} {r['checklist']}")
     if structure["has_tests"]:
         items.append("🧪 测试：关键路径有覆盖")
     return " | ".join(items)
@@ -310,13 +262,13 @@ def generate_quick_checklist(structure):
 def main():
     parser = argparse.ArgumentParser(description="CodeGuard 架构约束注入器")
     parser.add_argument("--path", default=".", help="项目根路径")
-    parser.add_argument("--format", default="prompt", choices=["json", "text", "prompt", "checklist"],
-                       help="输出格式: json=原始数据, text=可读摘要, prompt=AI注入格式, checklist=轻量提醒")
+    parser.add_argument("--format", default="checklist", choices=["json", "text", "prompt", "checklist"],
+                       help="输出格式: json=原始数据, text=可读摘要, prompt=AI注入格式, checklist=轻量提醒（默认，Token 最省）")
     args = parser.parse_args()
     
     root_path = os.path.abspath(args.path)
     if not os.path.isdir(root_path):
-        print(f"错误: 路径不存在: {root_path}", file=sys.stderr)
+        print(f"错误: 路径不存在: {root_path}", file=sys.stderr)  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
         sys.exit(1)
     
     structure = detect_project_structure(root_path)
@@ -324,26 +276,84 @@ def main():
     skill_rules = load_skill_rules()
     
     if args.format == "json":
-        print(json.dumps({"structure": structure, "custom_rules": custom_rules,
+        print(json.dumps({"structure": structure, "custom_rules": custom_rules,  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
                           "skill_rules": skill_rules}, ensure_ascii=False, indent=2))
     elif args.format == "text":
-        print(f"项目类型: {structure['type']}")
-        print(f"语言: {', '.join(structure['languages']) if structure['languages'] else '未检测到'}")
-        print(f"测试: {'有' if structure['has_tests'] else '无'}")
-        print(f"文档: {'有' if structure['has_docs'] else '无'}")
+        print(f"项目类型: {structure['type']}")  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
+        print(f"语言: {', '.join(structure['languages']) if structure['languages'] else '未检测到'}")  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
+        print(f"测试: {'有' if structure['has_tests'] else '无'}")  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
+        print(f"文档: {'有' if structure['has_docs'] else '无'}")  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
         if structure["layer_dirs"]:
-            print("分层目录:")
+            print("分层目录:")  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
             for layer, dirs in structure["layer_dirs"].items():
-                print(f"  {layer}: {', '.join(dirs)}")
-        print(f"\n活跃规则: {len(skill_rules)} 条通用规则", end="")
+                print(f"  {layer}: {', '.join(dirs)}")  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
+        print(f"\n活跃规则: {len(skill_rules)} 条通用规则", end="")  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
         if custom_rules["has_custom"]:
-            print(f" + {len(custom_rules['rules'])} 条自定义规则")
+            print(f" + {len(custom_rules['rules'])} 条自定义规则")  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
         else:
-            print("（无自定义规则）")
+            print("（无自定义规则）")  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
     elif args.format == "prompt":
-        print(generate_constraint_prompt(structure, custom_rules, skill_rules))
+        print(generate_constraint_prompt(structure, custom_rules, skill_rules))  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
     elif args.format == "checklist":
-        print(generate_quick_checklist(structure))
+        print(generate_quick_checklist(structure))  # codeguard: ignore GOLD_NO_PRINT_PRODUCTION
+
+
+# ============================================================
+# v2.1.0: ConstraintInjectorBase 适配层（向后兼容）
+# ============================================================
+
+# 添加 shared 目录到路径
+_SHARED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "shared")
+if _SHARED_DIR not in sys.path:
+    sys.path.insert(0, _SHARED_DIR)
+
+try:
+    from constraint_injector_base import ConstraintInjectorBase
+
+    class CodeGuardConstraintInjector(ConstraintInjectorBase):
+        """CodeGuard约束注入器 — 继承ConstraintInjectorBase。
+
+        复用现有的 load_skill_rules() 和项目结构检测逻辑。
+        """
+
+        def __init__(self, project_root: str = "."):
+            super().__init__()
+            self.project_root = project_root
+
+        def get_constraint_rules(self) -> list:
+            """返回CodeGuard约束规则。"""
+            rules = load_skill_rules()
+            custom = load_custom_rules(self.project_root)
+            if custom.get("has_custom"):
+                rules.extend(custom.get("rules", []))
+            return rules
+
+        def get_quality_gates(self) -> list:
+            """返回CodeGuard质量门禁配置。"""
+            return [
+                {"name": "no_eval", "category": "security",
+                 "pattern": r"\beval\s*\(", "fail_on_match": True,
+                 "description": "禁止使用eval()"},
+                {"name": "no_exec", "category": "security",
+                 "pattern": r"\bexec\s*\(", "fail_on_match": True,
+                 "description": "禁止使用exec()"},
+                {"name": "no_hardcoded_secrets", "category": "security",
+                 "pattern": r"(password|secret|api_key)\s*=\s*[\"'][^\"']+[\"']", "fail_on_match": True,
+                 "description": "禁止硬编码密钥"},
+            ]
+
+    def inject_constraints(context: dict) -> str:
+        """便捷函数：构建约束提示词。"""
+        injector = CodeGuardConstraintInjector(context.get("project_root", "."))
+        return injector.build_constraint_prompt(context)
+
+    def check_quality(code: str) -> dict:
+        """便捷函数：运行质量门禁检查。"""
+        injector = CodeGuardConstraintInjector()
+        return injector.run_all_gates(code)
+
+except ImportError:
+    pass  # constraint_injector_base 不可用时，保持原有函数式API
 
 
 if __name__ == "__main__":

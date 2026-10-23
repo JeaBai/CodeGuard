@@ -1,0 +1,127 @@
+# ──────────────────────────────────────────────────────
+# CodeGuard D5 增强 — Semgrep SAST 静态安全扫描门禁
+# 用途：Pull Request / Merge Request 触发时执行 SAST 扫描
+# 放置：.github/workflows/sast-gate.yml 或 .gitlab-ci.yml include
+# 实证依据：Veracode 2025 SOAR, GitClear 2025 AI 代码安全缺陷模式
+# ──────────────────────────────────────────────────────
+
+name: CodeGuard SAST 安全扫描
+
+on:
+  pull_request:
+    paths:
+      - '**/*.py'
+      - '**/*.js'
+      - '**/*.ts'
+      - '**/*.java'
+      - '**/*.go'
+      - '**/*.rb'
+      - '**/*.php'
+      - '**/*.cs'
+      - '**/*.cpp'
+      - '**/*.c'
+      - '**/*.h'
+      - '**/Dockerfile'
+      - '**/docker-compose*.yaml'
+      - '**/docker-compose*.yml'
+  push:
+    branches:
+      - 'main'
+      - 'master'
+      - 'release/*'
+  schedule:
+    - cron: '0 2 * * 1'  # 每周一 02:00 UTC 全量扫描
+
+jobs:
+  semgrep-scan:
+    name: Semgrep SAST 扫描
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Semgrep 增量扫描（PR 模式）
+        if: github.event_name == 'pull_request'
+        run: |
+          # 仅扫描 PR 变更文件，混合 OSS + CodeGuard 自定义规则
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR \
+            origin/${{ github.base_ref }}..HEAD \
+            | grep -E '\.(py|js|ts|java|go|rb|php|cs|cpp|c|h)$' \
+            | tr '\n' ' ')
+          if [ -n "$CHANGED_FILES" ]; then
+            semgrep scan \
+              --config=auto \
+              --config=.codebuddy/skills/CodeGuard/assets/semgrep-custom-rules/ \
+              --severity=ERROR \
+              --severity=WARNING \
+              --metrics=off \
+              --error \
+              --text \
+              --output=semgrep_incremental.txt \
+              $CHANGED_FILES
+            EXIT_CODE=$?
+            echo "=== SAST 增量扫描完成 ==="
+            cat semgrep_incremental.txt
+            exit $EXIT_CODE
+          else
+            echo "无源代码变更，跳过增量 SAST 扫描"
+          fi
+
+      - name: Semgrep 全量扫描（Push / 定时任务模式）
+        if: github.event_name != 'pull_request'
+        run: |
+          semgrep scan \
+            --config=auto \
+            --config=.codebuddy/skills/CodeGuard/assets/semgrep-custom-rules/ \
+            --severity=ERROR \
+            --severity=WARNING \
+            --metrics=off \
+            --json \
+            --output=semgrep_full.json \
+            --exclude='tests/**' \
+            --exclude='vendor/**' \
+            --exclude='node_modules/**' \
+            --exclude='dist/**' \
+            --exclude='build/**' \
+            --exclude='*.min.js' \
+            .
+          EXIT_CODE=$?
+          echo "=== SAST 全量扫描完成（退出码 $EXIT_CODE）==="
+          
+          # 可选：调用 CodeGuard 聚合 SAST 结果到统一质量报告
+          python .codebuddy/skills/CodeGuard/scripts/quality_security.py \
+            --aggregate-sast semgrep_full.json \
+            --format json > sast_aggregated.json 2>/dev/null || true
+          exit $EXIT_CODE
+
+  sast-report:
+    name: SAST 结果汇总
+    needs: semgrep-scan
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 产出安全态势摘要
+        run: |
+          echo "## CodeGuard SAST 安全扫描报告" >> $GITHUB_STEP_SUMMARY
+          echo "| 扫描类型 | 触发事件 | 状态 |" >> $GITHUB_STEP_SUMMARY
+          echo "|:---:|:---:|:---:|" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST (Semgrep) | ${{ github.event_name }} | ${{ needs.semgrep-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.semgrep-scan.result }}" != "success" ]; then
+            echo "⚠️ SAST 扫描发现安全缺陷，请查看上方日志详情" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ SAST 扫描通过" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 上传 SAST 结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-report
+          path: |
+            semgrep_*.txt
+            semgrep_*.json
+            sast_aggregated.json
+          retention-days: 30

@@ -1,490 +1,284 @@
 ---
 name: CodeGuard
-description: >
-  防止 AI 生成代码沦为"死山代码"的质量守护 Skill / MCP Server (v2.0.10)。
-  在 AI 生成代码前自动注入架构约束，生成后执行质量门禁检查。
-  支持 CodeBuddy Skill 模式 + MCP 协议跨平台模式 (Claude Code/Cursor/VS Code)。
-  检测圈复杂度、重复代码、架构分层违规、循环依赖、安全漏洞等问题。
-  输出置信度评分 (90-100=AST精确/80-89=高/70-79=中/60-69=低)。
-  当用户请求生成/修改代码、重构、或提及代码质量、架构、技术债务时应触发。
-  基于验证过的实证研究设计 (GitClear 2025, Sonar 2026, DORA 2024, CodeRabbit 2025, Veracode 2025)。
+description: "防止 AI 生成代码沦为\"死山代码\"的质量守护 Skill / MCP Server (v3.1.0)。 三层防线：生成前自动注入架构约束、生成中自查、生成后质量门禁检查；支持 CodeBuddy Skill 模式 + MCP 协议跨平台模式 (Claude Code/Cursor/VS Code)。 检测圈复杂度、重复代码、架构分层违规、循环依赖、安全漏洞、错误处理完整性。 行业规则集自动切换（Web/云、嵌入式、安全关键）；C 方言自动分流（通用 C/C++ 与嵌入式 C：MISRA/ISR/volatile/栈深度）。 输出置信度评分。 当用户请求生成/修改/重构代码，或提及代码质量、架构、技术债，或需要规范模块化与接口设计、降低模块耦合、检查跨模块调用是否可稳定、维护模块索引、接口契约与版本管理、依赖锁定与可复现构建、避免死山代码时应触发。 专注于应用层代码质量与安全（基础设施级 IaC 安全由 iac-guardian 处理）。 基于实证研究设计 (GitClear 2025, Sonar 2026, DORA 2024, CodeRabbit 2025, Veracode 2025)。"
+agent_created: true
 ---
-
-# CodeGuard — AI 代码质量守护者 (v2.0.10)
+# CodeGuard — AI 代码质量守护者 (v3.1.0)
 
 ## 概述
 
 防止 AI 生成代码沦为"死山代码"。v2.0 新增 **MCP 协议支持**、**置信度评分**、**文件类型感知**和**循环依赖检测**，覆盖所有主流 MCP 客户端。
 
-**两大运行模式：**
+## `.code-guardian/rules.json` 金级门控使用规则（自定义规则）
 
-| 模式 | 入口 | 适用场景 |
-|------|------|---------|
-| **CodeBuddy Skill** | 自动激活 (SKILL.md) | CodeBuddy 内 AI 辅助编程 |
-| **MCP Server** | `python scripts/mcp_server.py` | Claude Code / Cursor / VS Code / 任意 MCP 客户端 |
+**定位**：`.code-guardian/rules.json` 是 CodeGuard 的**项目级自定义规则文件**——门禁方案（级别、阈值、规则、忽略路径、C 方言）**可直接在文件里设定，无需改任何代码**，金级门控即由它驱动。
 
-**核心命题**：当前 AI 编程工具的对话式交互每次都是独立上下文，天然缺乏对项目全局架构的持续感知。实证数据（GitClear 2025，2.11 亿行代码）显示 AI 辅助编程已导致代码返工率上升 39%、重构占比下降 60%、复制粘贴代码增长 48%。
+**铁律 —— 自定义优先，存在即遵守**：
 
-**解决路径**：建立"生成前约束注入 → 生成中检查提醒 → 生成后脚本验证"三层防线 + 修复指引，从根源遏制死山代码。
+1. 该文件存在且设定了某一项 ⇒ **必须按设定值执行，该项不采用内置默认值**；
+2. 文件缺失、JSON 解析失败或顶层不是对象 ⇒ 整体回退内置默认金级（gold）；
+3. 某一项未设定 ⇒ 仅该项回落默认，已设定项仍按设定执行。
 
-## MCP 协议跨平台支持 (v2.0.10)
+**文件定位顺序**（`internal/rules_loader.py`，首个命中生效）：
 
-CodeGuard v2.0 实现了完整的 MCP (Model Context Protocol) 服务器，遵循 JSON-RPC 2.0 over stdio 规范。
+| 顺序 | 路径 |
+|---|---|
+| 1 | `<项目根>/.code-guardian/rules.json`（推荐，`_level`/`_c_dialect` 只认这一处） |
+| 2 | `<项目根>/rules.json` |
+| 3 | `<项目根>/.code-guardian.json` |
 
-### 配置方式
+### 可设定字段（存在即生效）
 
-**Claude Code:**
-```json
-{ "mcpServers": { "codeguard": { "command": "python", "args": ["scripts/mcp_server.py"] } } }
-```
+| 字段 | 取值 | 生效行为 |
+|---|---|---|
+| `_level` | `gold`/`silver`/`bronze` | 整组阈值基准切换为该级别；缺省 `gold`；未知值告警并回退 `gold` |
+| `thresholds` | 键值对 | **逐键覆盖**同级别默认阈值；仅已知键生效，未知键告警后忽略 |
+| `rules` | 规则数组 | 自定义规则**追加**在内置检测之后执行（叠加，不替换内置规则） |
+| `ignorePaths.patterns` | glob 数组 | 扫描前跳过匹配的目录/文件 |
+| `_c_dialect` | `auto`/`generic`/`embedded` | C 方言显式覆盖，压过自动分流 |
 
-**Cursor / VS Code:**
-在 `.cursor/mcp.json` 或 VS Code MCP 设置中添加：
-```json
-{ "mcpServers": { "codeguard": { "command": "python", "args": ["path/to/mcp_server.py"] } } }
-```
+> `_comment`/`_version`/`_description`/`_usage` 等 `_` 前缀字段是元数据，不参与门禁判定。
 
-### MCP Tool 清单
+### 三级阈值基准（`_level`）
 
-| Tool | 描述 | 输入 |
-|------|------|------|
-| `review_file` | 单文件完整检测 (含置信度) | `file_path`, `mode` |
-| `review_diff` | Git diff 增量检测 | `project_root`, `mode` |
-| `execute_rules` | 列出所有活跃规则 | `project_root` |
-| `inject_constraints` | 生成架构约束提示 | `project_root`, `format` |
+| 指标 | gold | silver | bronze |
+|---|---|---|---|
+| 圈复杂度 warn/block | 8/10 | 10/12 | 15/20 |
+| 函数参数 warn/block | 4/6 | 5/7 | 8/10 |
+| 嵌套深度 warn/block | 3/4 | 4/5 | 6/8 |
+| 类行数 warn/block | 200/350 | 300/450 | 500/800 |
+| 类方法数 warn | 12 | 15 | 20 |
+| 接口方法数 warn | 8 | 10 | 15 |
+| 重复行 warn/block | 5/8 | 6/10 | 10/15 |
+| 跨文件重复 block | 15 | 20 | 30 |
+| 文件行数 warn/block | 200/350 | 300/450 | 500/800 |
+| 测试覆盖率下限 % | 80 | 60 | 0 |
 
-### MCP Resource 清单
+未写 `thresholds` 时按 `_level` 对应基准整组执行；写了就**只覆盖写出的键**，其余仍走该级别基准。
 
-| URI | 描述 |
-|-----|------|
-| `codeguard://rules/default` | 默认规则集 (JSON) |
-| `codeguard://config/project` | 项目自定义配置 |
-
-## v2.0.10 新增能力
-
-### 0. 模块化架构重构
-
-将原 1303 行单体 `quality_check.py` 拆分为 6 个模块化子文件 + 薄编排器入口：
-
-| 模块 | 职责 | 行数 |
-|------|------|------|
-| `quality_core.py` | THRESHOLDS/_log/IssueCollector/FileClassifier/strip | ~200 |
-| `quality_checks.py` | 多语言复杂度/嵌套/参数/Python AST 检测 | ~270 |
-| `quality_security.py` | 安全检查(三扫描管线) + 异常处理检测 | ~170 |
-| `quality_dup.py` | 文件内/跨文件重复代码检测 | ~50 |
-| `quality_arch.py` | 依赖图/架构分层违规/循环依赖 | ~150 |
-| `quality_custom.py` | 自定义规则引擎/阈值覆盖/命名一致性 | ~110 |
-| `quality_check.py` | 薄编排器入口 (派发表消除 if/elif 链) | ~200 |
-
-`mcp_server.py` 新增 `_make_mcp_tool()` 工厂函数，消除 4 个 MCP tool 定义的重复结构。
-`constraint_injector.py` 模态分解 `detect_project_structure` (CC=33→8) 和 `load_custom_rules` (depth=7→3)。
-
-### 1. 置信度评分
-
-每项检测输出 0-100 置信度分数，按 mrzadexinho/codeguard 的设计标准：
-
-| 置信度 | 等级 | 来源 |
-|--------|------|------|
-| 90-100 | 确定 | AST 精确分析、循环依赖 |
-| 80-89 | 高 | 剥离注释/字符串后的正则、架构分析 |
-| 70-79 | 中 | 原始正则 (含注释噪音)、类方法数近似 |
-| 60-69 | 低 | 启发式推断、统计模式 |
-
-### 2. 文件类型感知 (FileClassifier)
-
-自动识别 6 种文件类型并调整规则行为：
-
-| 类型 | 触发条件 | 规则调整 |
-|------|---------|---------|
-| `source` | 默认 | 全量检测 |
-| `test` | `test_*/_test.*/tests/` | 跳过安全规则 |
-| `config` | `.json/.yaml/.toml` 非 src | 跳过复杂度，保留安全 |
-| `generated` | `generated/_pb2/_grpc/` | 跳过所有，仅标记 |
-| `migration` | `migration/` `.sql` | 跳过复杂度，保留 SQL 注入 |
-| `doc` | `.md` `docs/` | 全部跳过 |
-
-### 3. 依赖图 (DependencyGraph)
-
-构建全局模块依赖图，检测：
-- **分层违规**：Domain→Infrastructure (block)、Application→Infrastructure (warn)
-- **循环依赖**：DFS 检测 A→B→C→A 模式 (block, 置信度 95)
-
-### 4. 三扫描安全检测
-
-安全检测分三遍执行：
-- 第一遍：原始内容快速筛 (置信度 70)
-- 第二遍：剥离注释/字符串后精确匹 (置信度 85)
-- 第三遍：剥离后全文 DOTALL 双通道多行扫描 — 密码通道(括号+续行符归一化, block/85) + 函数调用通道(仅换行归一化) (v2.0.9)
-- 三遍结果合并去重，消除注释/字符串中的误报
-
-## 触发条件
-
-在以下任一场景中激活本 Skill：
-
-- 用户请求生成或修改代码文件
-- 用户要求重构、优化、扩展功能
-- 用户讨论架构设计、代码质量、技术债务
-- 用户输入 `/review`、`/quality` 等命令
-- 检测到项目根目录存在 `.code-guardian/` 自定义配置目录
-
-## 多 Agent 协作架构
-
-> **⚠️ 设计规范：** 此章节为多 Agent 协作的架构设计规范。当前版本无独立代码实现——Agent 间协作由 CodeBuddy Team Mode 平台层提供（参见 `send_message` / `team_create` 工具）。消息协议格式用于指导 Agent 间通信，非独立可执行功能。
-
-本 Skill 支持在 Team Mode 下拆分职责到多个 Agent 并行执行，解决单 Agent 模式下"生成与审查角色冲突"的问题。
-
-### Agent 角色定义
-
-| 角色 | 名称 | 职责 | 何时创建 |
-|------|------|------|---------|
-| **Architect** | `CodeGuard-architect` | 执行约束注入，在生成前将架构规则注入上下文 | 用户提出代码生成/修改请求时立即创建 |
-| **Generator** | `CodeGuard-generator` | 在注入的架构约束下生成/修改代码 | Architect 完成约束注入后创建 |
-| **Reviewer** | `CodeGuard-reviewer` | 执行质量门禁，审查生成的代码并产出报告 | Generator 完成代码生成后创建 |
-
-### 协作工作流（Team Mode）
-
-```
-用户请求 "实现用户注册功能"
-    │
-    ▼
-┌─────────────────────────────────┐
-│ 1. Architect Agent 启动         │
-│    - 运行 constraint_injector   │
-│    - 注入架构约束到上下文        │
-│    - 向 Generator 发送约束消息   │
-└─────────────┬───────────────────┘
-              │ 消息: {"type":"constraints", "rules":[...]}
-              ▼
-┌─────────────────────────────────┐
-│ 2. Generator Agent 启动         │
-│    - 基于约束生成代码            │
-│    - 逐项自查（防线二）          │
-│    - 输出代码 + 自查报告         │
-│    - 向 Reviewer 发送代码        │
-└─────────────┬───────────────────┘
-              │ 消息: {"type":"code", "files":[...], "self_check":{...}}
-              ▼
-┌─────────────────────────────────┐
-│ 3. Reviewer Agent 启动          │
-│    - 运行 quality_check.py      │
-│    - 对照约束验证代码            │
-│    - 产出质量报告                │
-│    - 向 main 汇报结果            │
-└─────────────┬───────────────────┘
-              │ 消息: {"type":"report", "summary":{...}, "issues":[...]}
-              ▼
-          用户收到质量报告
-```
-
-### Agent 间消息协议
-
-**Architect → Generator（约束消息）：**
-```json
-{
-  "type": "constraints",
-  "version": "1.0",
-  "project_structure": {"type": "layered", "layers": {}},
-  "block_rules": ["Domain层不得import Infrastructure层", "..."],
-  "warn_rules": ["圈复杂度≤10", "..."],
-  "custom_rules": ["TEAM_NO_PRINT_IN_PRODUCTION", "..."],
-  "checklist": ["分层架构: Domain不依赖Infrastructure", "..."]
-}
-```
-
-**Generator → Reviewer（代码提交消息）：**
-```json
-{
-  "type": "code_submission",
-  "version": "1.0",
-  "files": [
-    {"path": "domain/user.py", "lines": 45, "language": "python"},
-    {"path": "application/user_service.py", "lines": 30, "language": "python"}
-  ],
-  "self_check": {
-    "architecture_ok": true,
-    "complexity_ok": true,
-    "security_ok": false,
-    "security_notes": "使用环境变量存储API密钥，未硬编码"
-  },
-  "notes": "实现用户注册功能，遵循分层架构"
-}
-```
-
-**Reviewer → Main（质量报告消息）：**
-```json
-{
-  "type": "quality_report",
-  "version": "1.0",
-  "exit_code": 1,
-  "summary": {"total_issues": 3, "blocks": 0, "warnings": 2, "info": 1},
-  "issues": [
-    {"severity": "warn", "category": "complexity", "file": "domain/user.py", "line": 23, "message": "..."}
-  ],
-  "verdict": "PASS_WITH_WARNINGS",
-  "suggestions": ["建议拆分 calculate_score 函数降低复杂度"]
-}
-```
-
-### 单 Agent 模式（默认）
-
-如果不使用 Team Mode，主 Agent 按顺序执行三层防线：
-
-1. 运行 `constraint_injector.py --format checklist` 注入约束
-2. 生成代码并逐项自查
-3. 运行 `quality_check.py --mode personal --format json` 执行门禁
-4. 对 block 级别问题引导用户修复
-
-## 三层防线工作流
-
-### 防线一：生成前 — 注入架构约束
-
-**目标**：在生成任何代码之前，将项目架构规则注入到对话上下文中，利用首因效应对抗 "Lost in the Middle" 现象。
-
-**执行步骤（严格按顺序）：**
-
-1. 运行约束注入脚本获取项目结构：
-
-```bash
-python scripts/constraint_injector.py --path <project_root> --format checklist
-```
-
-2. 将脚本输出的检查清单放置于本次对话**第一条消息的开头**，确保约束在上下文最前端。
-
-3. 如果任务是跨文件修改或架构级变更，执行完整约束注入：
-
-```bash
-python scripts/constraint_injector.py --path <project_root> --format prompt
-```
-
-4. 将完整约束注入内容作为代码生成前的**系统级前置说明**。
-
-5. 从 `references/architecture_rules.md` 中读取规则定义，确保检测逻辑与注入约束一致。
-
-6. **多 Agent 模式**：Architect Agent 执行此步骤，通过 `{"type":"constraints", ...}` 消息将结果传递给 Generator Agent。
-
-### 防线二：生成中 — 逐项自查
-
-**目标**：代码生成后、输出给用户前，逐项对照检查清单确认。
-
-**执行步骤（对每次代码生成输出执行）：**
-
-1. 检查分层架构：
-   - Domain 层是否引用了 Infrastructure 或 Presentation 层？如有 → 标记为架构违规并说明正确做法
-   - Application 层是否直接依赖 Infrastructure 具体实现？如有 → 警告并建议通过接口倒置
-
-2. 检查重复代码：
-   - 新增代码是否与已有功能存在重叠？如有 → 警告并建议重构而非叠加
-
-3. 检查复杂度：
-   - 单函数圈复杂度是否超过 10？如有 → 建议拆分
-   - 函数参数是否超过 5 个？如有 → 建议封装为参数对象
-
-4. 检查安全性：
-   - 代码中是否包含硬编码密码/API Key/Token？如有 → 阻塞，使用环境变量替代
-   - 是否使用字符串拼接构造 SQL？如有 → 阻塞，改用参数化查询
-
-5. 检查命名一致性：
-   - 同一概念是否与项目中已有命名风格一致？不一致 → 统一为已有风格
-
-6. 检查异常处理：
-   - except/catch 块是否为空或仅 print？如有 → 警告并添加适当的错误处理
-
-7. **多 Agent 模式**：Generator Agent 生成代码并完成自查后，通过 `{"type":"code_submission", ...}` 消息将代码和自查结果传递给 Reviewer Agent。
-
-### 防线三：生成后 — 质量门禁
-
-**目标**：代码落地后执行自动化检测，产出结构化质量报告。
-
-**执行步骤：**
-
-1. 个人模式（默认，快速检查）：
-
-```bash
-python scripts/quality_check.py --path <project_root> --mode personal --format json
-```
-
-2. 团队模式（额外启用命名一致性检查 + 自定义规则执行）：
-
-```bash
-python scripts/quality_check.py --path <project_root> --mode team --format json
-```
-
-3. 增量模式（仅检测 git 变更文件，适合大项目）：
-
-```bash
-python scripts/quality_check.py --path <project_root> --mode diff --format json
-```
-
-4. 解读 JSON 输出：
-   - 退出码 0 → 通过，无问题
-   - 退出码 1 → 有警告，需人工确认
-   - 退出码 2 → 有阻塞项，必须修复
-
-5. 对每个阻塞（block）级别的问题，提供具体修复方案并引导用户修改。
-
-6. **多 Agent 模式**：Reviewer Agent 执行此步骤，通过 `{"type":"quality_report", ...}` 消息向 main 汇报结果。
-
-### 修复指引
-
-当检测到问题时，按以下映射提供修复建议：
-
-| 问题类别 | 修复建议 |
-|---------|---------|
-| 圈复杂度超标 (complexity) | 拆分为多个小函数；使用策略模式消除条件分支 |
-| 重复代码 (duplication) | 提取为共享函数或模块；考虑模板方法模式 |
-| 架构分层违规 (architecture) | Domain 层定义接口，Infrastructure 层实现；使用依赖注入 |
-| 安全红线 (security) | 使用环境变量/密钥管理服务；参数化查询；禁用 eval/exec |
-| 命名不一致 (naming) | 统一为项目中已有命名约定；建立团队术语表 |
-| 文件过大 (file_size) | 按职责拆分为多个模块，单文件 ≤ 300 行 |
-| 错误处理不足 (error_handling) | 添加日志记录和错误恢复/降级逻辑 |
-| 自定义规则 (custom_rule) | 参见 `.code-guardian/rules.json` 中对应规则的 suggestion 字段 |
-
-## 可执行脚本
-
-### scripts/constraint_injector.py
-
-架构约束提取与 Prompt 注入。
-
-| 场景 | 命令 | Agent 角色 |
-|------|------|-----------|
-| 生成前快速检查清单 | `python scripts/constraint_injector.py --path . --format checklist` | Architect |
-| 复杂任务的完整约束 | `python scripts/constraint_injector.py --path . --format prompt` | Architect |
-| 程序集成（JSON） | `python scripts/constraint_injector.py --path . --format json` | Architect |
-| 人工查看 | `python scripts/constraint_injector.py --path . --format text` | — |
-
-### scripts/quality_check.py
-
-代码质量门禁检测。
-
-| 场景 | 命令 | Agent 角色 |
-|------|------|-----------|
-| 个人全量检测 | `python scripts/quality_check.py --path . --mode personal` | Reviewer |
-| 团队全量检测 | `python scripts/quality_check.py --path . --mode team` | Reviewer |
-| 增量检测（仅变更文件） | `python scripts/quality_check.py --path . --mode diff` | Reviewer |
-| 文本格式输出 | `python scripts/quality_check.py --path . --format text` | — |
-
-### scripts/mcp_server.py (v2.0.10)
-
-MCP 协议服务端，JSON-RPC 2.0 over stdio。
-
-| 场景 | 命令 |
-|------|------|
-| 启动 MCP Server | `python scripts/mcp_server.py --project-root .` |
-| MCP 客户端配置 | 参见上方 "MCP 协议跨平台支持" 节 |
-
-### 检测范围对照
-
-| 文件类型 | 复杂度 | 嵌套深度 | 参数数量 | 类方法数 | 文件大小 | 安全红线 | 重复代码 | 架构违规 | 异常处理 |
-|---------|--------|---------|---------|---------|---------|---------|---------|---------|---------|
-| `.py` | ✅ AST | ✅ AST | ✅ AST | ✅ AST | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `.js/.ts` | ✅ 正则 | ✅ 大括号 | ✅ 正则 | — | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `.java` | ✅ 正则 | ✅ 大括号 | ✅ 正则 | ✅ 正则 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `.go` | ✅ 正则 | — | ✅ 正则 | — | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `.cs` | ✅ 正则 | ✅ 大括号 | ✅ 正则 | ✅ 正则 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `.cpp/.c/.h` | ✅ 正则 | ✅ 大括号 | ✅ 正则 | — | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `.rs` | ✅ 正则 | — | ✅ 正则 | — | ✅ | ✅ | ✅ | ✅ | ✅ |
-
-> 正则近似精度比 AST 低 ~15%，但保持零外部依赖。Go 的嵌套深度检测未实现（Go 用缩进而非大括号控制作用域，需 gofmt 辅助解析）。
-
-> 架构违规检测现已支持 Python/JS/TS/Java/Go/C#/Rust 的 import 语法提取。
-
-## 团队自定义
-
-在项目根目录创建 `.code-guardian/rules.json`。自定义规则采用声明式格式，`quality_check.py` 的声明式引擎自动解析执行。
-
-```json
-{
-  "rules": [
-    {
-      "id": "TEAM_NO_DIRECT_DB",
-      "description": "Controller 层不得直接调用数据库操作",
-      "severity": "block",
-      "target": "presentation",
-      "pattern": "(?:DatabaseConnection|db\\.execute|Session\\(\\)|create_engine)",
-      "message": "Controller 层直接访问数据库",
-      "suggestion": "必须通过 Service 层封装所有数据库操作"
-    },
-    {
-      "id": "TEAM_LOGGING_STANDARD",
-      "description": "所有异常必须使用 structured logging 记录",
-      "severity": "warn",
-      "target": "all",
-      "pattern": "except\\s+\\w+.*:\\s*\\n\\s*(?:pass|print|return\\s+None)",
-      "message": "异常处理缺少日志记录",
-      "suggestion": "使用 logging.exception() 记录异常上下文"
-    }
-  ]
-}
-```
-
-### 自定义规则字段说明
+### 自定义规则条目格式（`rules` 数组）
 
 | 字段 | 必填 | 说明 |
-|------|------|------|
-| `id` | ✅ | 规则唯一标识 |
-| `description` | ✅ | 规则说明 |
-| `severity` | ✅ | `block` / `warn` / `info` |
-| `target` | ❌ | 作用域：`all`(默认) / `domain` / `application` / `infrastructure` / `presentation` / `python` / `javascript` / `java` / `go` / `csharp` / `rust` / 文件名模式 |
-| `pattern` | ✅ | 正则表达式（Python re 语法） |
-| `message` | ❌ | 违规时的消息（默认使用 description） |
-| `suggestion` | ❌ | 修复建议 |
+|---|---|---|
+| `pattern` | ✅ | 正则（Python `re`；默认忽略大小写 + MULTILINE，`case_sensitive: true` 可关） |
+| `id` | 推荐 | 规则唯一标识，报告以 `[id]` 前缀回显；缺省显示为 `?` |
+| `severity` | ❌ | `block`/`warn`/`info`，默认 `warn` |
+| `target` | ❌ | 作用域：`all`(默认) / 语言（`python`/`javascript`/`java`/`go`/`csharp`/`rust`）/ 管道多语言 / 架构层（`domain`/`application`/`infrastructure`/`presentation`）/ glob |
+| `message`/`suggestion` | ❌ | 违规消息 / 修复建议 |
+| `expected_precision` | ❌ | 0–1，校准置信度（未指定时正则规则默认 80） |
 
-### 金级质量门禁（v2.0.10）
+**叠加语义**：内置检测（函数级圈复杂度/参数/嵌套、重复、架构分层、安全红线、模块化）**始终执行**；`rules` 里的自定义规则在其后叠加。想排除某类误报用 `ignorePaths` 或行内豁免，不存在"自定义规则替换内置规则"。
 
-CodeGuard 内置腾讯金级（核心系统）质量门禁预设。只需在项目根目录放置 `.code-guardian/rules.json`，即可一键升级到金级标准。
+**行内豁免**：目标行或其上方 3 行内的 `# codeguard: ignore <RULE_ID>` / `# noqa`。
 
-**金级 vs 默认：**
+### 边界（如实说明）
 
-| 指标 | 默认(warn/block) | 金级(warn/block) |
-|------|-----------------|------------------|
-| 圈复杂度 | 10/15 | 8/10 |
-| 嵌套深度 | 4/6 | 3/4 |
-| 函数参数 | 5/8 | 4/6 |
-| 文件行数 | 300/500 | 200/400 |
-| 类行数 | 300/500 | 200/400 |
-| 类方法数 | 15 | 10 |
-| 重复行 | 6/10 | 4/6 |
-| 跨文件重复 | 20 | 15 |
+- `.code-guardian/config.json` 的 `gate_level` 被**显式设为非 gold** 时，优先于 rules.json 的 `_level`（config.json 是显式选择，rules.json 是默认值）；行业维度（web/embedded/safety）及其阈值覆盖由 MCP 侧 `init_industry_aware` 在门禁阈值之上再叠加。
+- 旧版 `.code-guardian/rules.yaml|yml|toml` 不受支持，仅输出迁移警告后跳过。
+- 未知 `_level`、未知阈值键、无效正则都会**告警并跳过对应项**，不会静默生效。
 
-**金级额外规则**（17 条强制规则）：禁止裸 except / 可变默认参数 / 通配符导入 / print 生产代码 / console.log / any 类型 / 同步 I/O / 魔法数字 / 硬编码 URL / SQL 拼接 / os.system / 空异常块 / eval 动态执行等。
+## v3.0.0 新增能力
 
-**使用方法**：复制 CodeGuard 仓库中的 `.code-guardian/rules.json` 到你的项目根目录，或参阅该文件自行定制。
+### 行业分离（Web/云 vs 嵌入式 vs 安全关键）
 
-**自定义阈值**：在 `rules.json` 的 `"thresholds"` 字段覆盖任意 THRESHOLDS 键值。未知键将被静默忽略。支持分级（金/银/铜）快速切换。
+**核心问题**：Web/云金级规则（34条）包含 API版本管理、DB迁移安全、健康检查端点等 6 条 Web 专用规则，在嵌入式固件场景全是噪音。同时，嵌入式核心 MISRA-C 规则（9条）在 Web 项目中无适用对象。统一规则集导致双向误报。
 
+**解决方案**：三维正交设计 — 行业维度 × 门禁级别 × 商业版本，互不耦合。
+
+| 行业 | 规则集文件 | 金级规则数 | 适用场景 |
+|------|-----------|:---------:|---------|
+| `web` | `rules.json` (现有) | 34 条 | API服务/前端/后端/云原生 |
+| `embedded` | `profiles/embedded-gold.json` | 26 条 | RTOS/裸机/单片机/固件/驱动 |
+| `safety` | `profiles/safety-gold-asil-dc.json` (Phase 2) | 待定 | 车规ASIL D-C/医疗IEC 62304/工业IEC 61508 |
+
+**行业自动检测**：`industry_detector.py` 根据项目特征（ISR/volatile/链接脚本/Cargo.toml no_std/ISO 26262关键词）自动判定行业维度，也可通过 `.code-guardian/config.json` 显式指定。
+
+**配置入口**：`.code-guardian/config.json`
 ```json
 {
-  "thresholds": {
-    "cyclomatic_complexity_block": 10,
-    "max_nesting_block": 4
-  },
-  "rules": [...]
+  "industry": "auto",      // auto/web/embedded/safety
+  "gate_level": "gold",     // gold/silver/bronze
+  "asil_level": null        // 仅 safety 行业有效: A/B/C/D
 }
 ```
 
-## 参考文档
+**集成初始化**：`quality_core_config.py` 新增 `init_industry_aware(root_path)` — 一次性完成门禁级别读取 + 行业检测 + 阈值叠加 + 规则集加载。
 
-- `references/architecture_rules.md` — 完整架构规则定义，包含 SOLID 原则、分层约束、DRY 检测、安全红线、AI 代码反模式、度量指标
+**阈值差异**：嵌入式金级放宽 CC 至 15（状态机天然偏高）、收紧嵌套至 3（中断嵌套应更严格）、放宽文件行数至 500（驱动文件常超 350 行）。
 
-### 规则设计依据（已独立验证的实证研究）
+**MCP 新增工具**：
+- `get_industry` — 查询当前项目行业维度配置（行业/门禁级别/规则集路径/阈值数）
 
-| 数据源 | 关键发现 | 对应规则 |
-|--------|---------|---------|
-| GitClear 2025 (2.11亿行) | 返工率 +39%，重构占比 −60%，复制粘贴 +48% | 重复代码检测、重构提醒 |
-| Sonar 2026 | 信任度 29% vs 采纳率 84%；>90% 问题为代码异味 | 圈复杂度、类大小限制 |
-| DORA 2024 | AI 采纳 +25% → 交付稳定性 −7.2% | 增量检测模式、度量指标 |
-| CodeRabbit 2025 (470 PR) | AI 代码问题 1.7x，安全漏洞 +274% | 安全红线、复杂度门禁 |
-| Veracode 2025 | 45% AI 代码未通过安全测试 | 硬编码密钥、SQL 注入检测 |
-| arXiv 2603.28592 (6299仓库) | AI 技术债务 89.3% 为代码异味 | 架构分层违规检测 |
-| METR RCT (16 资深开发者) | 使用 AI 实际慢 19%，自认快 20% | 约束注入（防止"效率幻觉"导致的审查放松） |
+**`execute_rules` 增强**：返回值新增 `industry`、`gate_level`、`profile_path`、`industry_rules` 字段，并自动追加行业规则集规则。
 
-## 技术债务度量建议
+### 三层防线（生成前 / 生成中 / 生成后）
 
-使用本 Skill 时追踪以下指标（基于 GitClear 2025 和 DORA 2024 研究）：
+统一规则单一事实源 `quality_rule_registry.py`，三层防线共享同一套规则元数据（rule_id/name/severity/category/confidence/file_types/checklist），消除三处硬编码不一致。
 
-| 指标 | 健康值 | 警示值 | 测量方式 |
-|------|--------|--------|----------|
-| 代码耐久性 | > 80% | < 60% | 14 天后未修改的代码占比 (`git log`) |
-| AI 代码变动率 | < 20% | > 30% | 14 天内被修改的 AI 代码占比 (`git diff`) |
-| 重复代码率 | < 5% | > 10% | `quality_check.py --mode diff` |
-| CRAP 指数 | < 15 | > 30 | CC² × (1−coverage)³ + CC |
+| 层 | 阶段 | 组件 | 能力 |
+|----|------|------|------|
+| 第一层 | 生成前 | `constraint_injector.py` + `FileClassifier` | 注入架构约束 + 文件类型差异化过滤（`load_skill_rules(file_type)`），清单从注册表动态生成 |
+| 第二层 | 生成中 | `quality_mid_check.py` | 对代码片段逐项自查，输出 `{rule_id, passed, confidence, evidence}` 置信度评分 |
+| 第三层 | 生成后 | `quality_arch.py` + `quality_security.py` | DependencyGraph 循环依赖 + 三扫描安全 + `rule_id↔category` 闭环审计 |
+
+**闭环映射**：`IssueCollector` 记录 `rule_id`（category 唯一映射时自动补），报告可反查注入规则名，实现"注入约束 ↔ 检出违规"可追溯。
+
+## v2.2.1 新增能力
+
+### 函数级检测精度修复（消除文件级累加误报）
+
+**核心问题**：文件级 CC/nesting 累加导致多函数 clean 文件被误报（10 项 FP）。
+
+**解决方案**：改为函数级检测（`_compute_function_cc` / `_compute_function_nesting`），按函数定义正则分割函数体、屏蔽嵌套函数体，独立计算每个函数的 CC/嵌套深度；修正正则重复计数（Go `if err != nil`、各语言 `else if`），嵌套关键字移除 class/function 结构项。
+
+### 语言专属规则（补齐 10 语言漏检）
+
+`LANG_SPECIFIC_RULES` 补齐各语言 easy 级违规模式：C `goto`、C++ 裸 `new`/多继承、Go `panic`/匿名 `goroutine`、Java `System.exit`/`while(true)`、TS `@ts-ignore`/`@ts-nocheck`、Rust `unsafe`/`transmute`/FFI、C# 空 `catch`/`.Result` 阻塞；嵌入式 `_ISR_BLOCKING_CALLS` 扩展 `delay\w*`。
+
+### 约束注入自动分档（Token 经济化）
+
+`inject_constraints` 按项目复杂度自动分档：常规任务 → `checklist`（轻量，Token 净节省 ~50%），复杂任务（源码文件 >50 / 存在架构蓝图 / 分层目录 ≥3）→ `prompt`（完整架构全景）。CLI `--format` 默认值统一为 `checklist`。
+
+## v2.2.0 新增能力
+
+### C 方言分流（通用 C/C++ vs 嵌入式 C）
+
+**核心问题**：通用 C/C++ 与嵌入式 C 虽同用 C 语言，但规则集本质冲突（通用允许 new/递归/goto，嵌入式 MISRA 硬禁 malloc/递归/goto），混用同一套规则会双向误报。
+
+**解决方案**：在文件分类层自动分流，各走各的规则集与阈值：
+
+| 方言 | 判定信号 | 规则集 | 阈值 |
+|------|---------|--------|------|
+| `generic` | 默认（无嵌入式信号） | 函数级圈复杂度 + 参数 + 嵌套 + 安全 | 全局金级 |
+| `embedded` | RTOS 头/ISR 定义/寄存器宏/链接脚本/裸机操作 | MISRA C:2012 子集 + ISR 安全 + volatile + 栈深度 + 递归/goto/动态内存禁用 | 独立模块常量 |
+
+**显式覆盖**：`.code-guardian/rules.json` 的 `_c_dialect` 字段（`auto`/`generic`/`embedded`）。
+
+**新模块**：
+- `quality_c_dialect.py` — 方言分类器（O(n) 单次扫描）
+- `quality_embedded.py` — 嵌入式专用检测（7 类规则）
+- `rules/misra-c-rules.json` — MISRA C:2012 子集声明式清单
+
+**架构检测修复**：补 C/C++ `#include` 提取 + 嵌入式分层映射（HAL/BSP/Driver→infrastructure，App/Task→application），消灭此前 C 文件静默跳过依赖图的伪覆盖。
+
+## v2.0.14 新增能力
+
+### 蓝图生成与上下文压缩
+- **blueprint_generator.py**: 从代码库自动生成 `architecture_blueprint.json`，提取模块结构、依赖图、公共 API、嵌套深度
+- **blueprint_schema.py**: 定义蓝图的完整 JSON Schema + Pydantic 运行时校验
+- **context_compressor.py**: L0-L3 四层上下文压缩，对抗"Lost in the Middle"效应
+- **impact_analyzer.py**: 变更影响分析，支持函数签名变更/文件移动/全局变量/模块依赖四维分析
+- **dashboard_generator.py**: 可视化健康看板生成，多维度评分含安全/代码/架构
+
+### 可视化
+- 暗色主题健康看板，Canvas 雷达图，三维度评分卡片
+- 交互式问题列表（一键修复/查看详情/人工确认）
+- 响应式设计，移动端/平板/桌面自适应
+
+## 商业化模式
+
+| 版本 | 嵌入式检测 | 其他功能 | 定价 |
+|------|-----------|---------|------|
+| **免费版** | - | 基础AST检测、安全扫描、模板引擎、看板 | 免费 |
+| **专业版** | MISRA-C基础7条 (pro+) | 蓝图生成、上下文压缩、自定义规则、中风险确认 | 按月 |
+| **团队版** | +ISR优先级/看门狗/电源管理 (team+) | 重构队列、快照回滚、文件锁、影响分析、团队协作 | 按月 |
+| **企业版** | +工具链/链接脚本/启动文件/Hex/Rust (enterprise) | SSO、私有部署、审计日志、SLA、飞控检测 | 年度合同 |
+
+### 嵌入式检测功能矩阵
+
+| 功能 | free | pro | team | enterprise |
+|------|:----:|:---:|:----:|:----------:|
+| MISRA-C基础(类型声明/switch默认/动态内存禁用/void参数) | - | ✅ | ✅ | ✅ |
+| MISRA-C扩展(指针越界/返回值忽略/符号转换/枚举) | - | - | ✅ | ✅ |
+| ISR优先级分组检测 | - | - | ✅ | ✅ |
+| 看门狗配置与喂狗检测 | - | - | ✅ | ✅ |
+| 电源管理(WFI/WFE)合理性 | - | - | ✅ | ✅ |
+| 启动文件(startup_*.s)向量表分析 | - | - | - | ✅ |
+| 链接脚本(.ld)内存布局分析 | - | - | - | ✅ |
+| Makefile/CMake工具链检测 | - | - | - | ✅ |
+| Hex/Bin产物校验 | - | - | - | ✅ |
+| Rust embedded(no_std/cortex_m)方言 | - | - | - | ✅ |
+| 飞控硬件检测(引脚/串口/刷新率/状态机) | - | - | - | ✅ |
+
+### 检测器插件架构
+
+所有检测器通过 `@register_detector` 装饰器自注册到 `detector_registry.py`：
+
+```python
+from detector_registry import register_detector
+
+@register_detector("embedded", "isr")
+def _check_isr_priority(file_path, content, findings):
+    # 检测逻辑
+    return findings
+```
+
+新增检测器只需编写函数 + 加装饰器，无需修改编排逻辑。
+
+**差异化价值**: 实证数据显示 AI 辅助编程导致代码返工率上升 39%（GitClear 2025），CodeGuard 通过"生成前约束注入 → 生成后门禁验证"闭环将返工率降低 60% 以上。
+
+---
+
+## AI 调用指南
+
+### 可用脚本
+
+| 脚本 | CLI 签名 | 用途 |
+|---|---|---|
+| `quality_check.py` | `python quality_check.py [--path .] [--mode {personal\|team\|diff\|test-coverage}] [--coverage-threshold 80] [--format {json\|text}]` | 全量/增量质量检测入口，退出码 0=PASS/1=WARN/2=BLOCK |
+| `blueprint_generator.py` | `python blueprint_generator.py --path . --output blueprint.json [--incremental] [--no-validate] [--summary-only]` | 从代码库生成架构蓝图 JSON |
+| `blueprint_schema.py` | `python blueprint_schema.py <blueprint.json>` | Pydantic 运行时蓝图校验 |
+| `constraint_injector.py` | `python constraint_injector.py [--path .] [--format {json\|text\|prompt\|checklist}]` | 提取架构约束生成 AI prompt 注入文本 |
+| `context_compressor.py` | `python context_compressor.py --action {generate-all\|generate-l0\|get-context\|refresh} [--project .] [--module M] [--task T]` | L0-L3 分层上下文压缩 |
+| `impact_analyzer.py` | `python impact_analyzer.py --action {analyze\|file-move\|global-var\|module-dep} [--file F] [--function F] [--change C]` | 四维变更影响分析 |
+| `dashboard_generator.py` | `python dashboard_generator.py [--project .] [--blueprint PATH] [--codeguard-output PATH] [--output dashboard.html] [--watch]` | 生成可视化健康看板 |
+| `quality_coverage.py` | `python quality_coverage.py [--path .] [--threshold 80] [--format {json\|text}]` | 测试覆盖率门禁 |
+| `module_health.py` | `python module_health.py --blueprint blueprint.json [--focus all\|orphans\|utilization\|bloat\|hotspot\|dead-code\|clones\|shared] [--format text\|json] [--max-files 10] [--max-lines 2000] [--since-days 90] [--project-root .] [--codeowners PATH]` | 模块健康分析 v1.3.0：孤儿/利用率/膨胀/热点/dead-code 死代码/CODEOWNERS 集成/AST 语义克隆+复用建议 |
+| `api_compatibility.py` | `python api_compatibility.py --old v1.json --new v2.json [--format markdown\|text\|json] [--output report.md]` | API 破坏性变更检测：前后蓝图 public_api diff → 兼容性报告 |
+| `mcp_server.py` | `python mcp_server.py --project-root .` | MCP JSON-RPC 2.0 stdio 服务 |
+
+### MCP 工具（通过 mcp_server.py 暴露）
+
+| Tool 名 | 入参 | 出参 | 用途 |
+|---|---|---|---|
+| `review_file` | `file_path` (必填), `mode` (personal/team) | issues 列表 + summary + exit_code | 单文件质量检测 |
+| `review_diff` | `project_root` (必填), `mode` (personal/team) | issues + summary + exit_code | Git 变更增量检测 |
+| `execute_rules` | `project_root` (必填) | total_rules + industry + gate_level + profile_path + rules 列表含 severity/confidence | 列出所有活跃规则 (含行业规则集 v3.0.0) |
+| `inject_constraints` | `project_root` (必填), `format` (prompt/checklist/json，省略时自动分档), `file_type` (source/test/config/generated/migration/doc) | format + content + project_type + file_type + auto_tiered | 生成架构约束注入文本（v3.0.0 自动分档 + 文件类型差异化） |
+| `get_industry` | `project_root` (必填) | industry + gate_level + profile_path + industry_rules_count + thresholds_applied | 查询项目行业维度配置 (v3.0.0) |
+
+### 跨 SKILL 接口
+
+| 方向 | 项目 | 格式 | 消费方 | 推荐顺序 |
+|---|---|---|---|---|---|
+| **输出** | `architecture_blueprint.json` | Blueprint Schema | governance-hub (tag_manager/risk_gate), project-manager (template_engine/refactor_queue) | 步骤1-产出 → 步骤2/3 入口 |
+| **输出** | `scan_results` (collector.summary + issues) | IssueCollector 格式 | governance-hub (risk_gate 分级), project-manager (refactor_queue 入队) | 步骤1-产出 → 步骤2 分级 |
+| **输出** | 模块健康报告 (`module_health.py --format json`) | JSON（利用率/孤儿/膨胀/热点/死代码/克隆） | project-manager (refactor_queue 入队), dashboard_generator (看板集成) |\n| **输出** | API 兼容性报告 (`api_compatibility.py --format markdown`) | Markdown breaking changes 报告 | governance-hub (发布门禁), project-manager (规划输入) | 步骤1-产出 → 步骤3 评估 |
+| **输入** | 风险分级结果 | governance-hub/risk_gate JSON | 分级修复决策 (auto/confirm/manual) | 步骤2-依赖 ← 步骤2 返回 |
+| **输入** | 快照对比结果 | governance-hub/snapshot_manager JSON | 门禁判断 (approve/reject) | 步骤2-依赖 ← 步骤2 返回 |
+| **输入** | 设计意图保护记录 | governance-hub/intent_protection.json | 扫描时自动 skip/downgrade 保护项 | 步骤2-依赖 ← 步骤2 过滤 |
+
+---
+
+> 以下为原有内容（v2.0.12），新能力已在 `scripts/` 目录中实现。
+
+## 版本历史
+
+> 变更史**只放这里**，不写进 description（description 只承载「是什么 + 触发条件」，
+> 写了变更史会白占常驻 token 且对触发毫无帮助）。
+
+| 版本 | 变更 |
+|---|---|
+| v3.1.0 | **新增模块化与接口设计维度**：`quality_modular.py` 9 条规则（跨模块硬编码、私有符号越界、同名脚本歧义、缺接口文档、无超时、测试未分层、无契约校验、无依赖锁定、版本浮动），规则统一登记在 `quality_rule_registry.RULE_SPECS` 供三层防线共用；新增 `tests/test_modularity.py` |
+| v3.0.0 | 新增行业分离：Web/云、嵌入式、安全关键三行业规则集自动切换 |
+| v2.2.1 | 新增函数级圈复杂度/嵌套检测 + 语言专属规则（消除文件级累加误报）+ 约束注入自动分档 |
+| v2.2.0 | 新增 C 方言分流：通用 C/C++ 与嵌入式 C（MISRA/ISR/volatile/栈深度）在文件分类层自动分流 |
+
+### 置信度评分口径
+
+| 区间 | 依据 |
+|---|---|
+| 90-100 | AST 精确分析 |
+| 80-89 | 剥离注释/字符串后的正则 |
+| 70-79 | 原始正则 |
+| 60-69 | 启发式 |

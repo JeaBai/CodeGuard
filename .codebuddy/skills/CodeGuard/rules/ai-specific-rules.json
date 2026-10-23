@@ -1,0 +1,172 @@
+{
+  "_comment": "CodeGuard AI 生成代码专项规则包 — 针对 AI 辅助编程高频缺陷模式的拦截规则（D1 增强）",
+  "_version": "1.0.0",
+  "_usage": "导入方式：将本文件 rules 数组合并入项目根目录 .code-guardian/rules.json 的 rules 中（与 GOLD_ 规则并存），或在 CodeBuddy 中要求『启用 AI 专项规则包』。本包不修改 CodeGuard 任何已有文件。",
+  "_evidence": "规则设计依据已联网核验的实证来源：PocketOS 9秒删库（2026-04，已验证）、AWS Kiro 删除生产环境（2025-12，已验证）、Replit 删库（2025-07，Fortune，已验证）、Cloudflare 2025-12-05 配置秒级下发事故（已验证）、CodeRabbit 470PR 报告（1.7x/+274%，已验证）、Veracode 2025（45% 未过安全测试，已验证）、GitClear 2025（2.11亿行）、Cloud Storage Security 273K PDF S3 泄漏、CyberArk Shai-Hulud npm 攻击。详见 _audit/citation-ledger.md",
+  "_false_positive_note": "SQL 类规则基于单行模式，跨行 SQL（DELETE/UPDATE 与 WHERE 分行）可能误报，命中时请人工确认上下文；yaml/*.tf 文件名 glob 依赖 CodeGuard target 文件名模式支持。",
+
+  "rules": [
+    {
+      "id": "AI_SQL_DELETE_WITHOUT_WHERE",
+      "description": "AI 高频致命缺陷：DELETE 语句无 WHERE 条件（全表删除，PocketOS/Replit 删库模式）",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?i)\\bDELETE\\s+FROM\\s+[\\w.\"`]+\\s*(?:;|[\"')]|$)(?!.*\\bWHERE\\b)",
+      "message": "AI 红线：DELETE 语句缺少 WHERE 条件，将删除全表数据（AI 代理删库事故的首要模式）",
+      "suggestion": "任何 DELETE 必须带 WHERE；生产环境先 SELECT 同条件确认影响行数；ORM 场景禁止 Model.objects.all().delete() 无过滤调用"
+    },
+    {
+      "id": "AI_SQL_UPDATE_WITHOUT_WHERE",
+      "description": "AI 高频致命缺陷：UPDATE 语句无 WHERE 条件（全表更新）",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?i)\\bUPDATE\\s+[\\w.\"`]+\\s+SET\\b(?!.*\\bWHERE\\b).*",
+      "message": "AI 红线：UPDATE 语句缺少 WHERE 条件，将更新全表数据",
+      "suggestion": "任何 UPDATE 必须带 WHERE；跨行 SQL 请人工确认 WHERE 在后续行（误报时豁免并注释原因）"
+    },
+    {
+      "id": "AI_SQL_DROP_WITHOUT_IF_EXISTS",
+      "description": "DROP TABLE 缺少 IF EXISTS 保护，迁移重放时直接失败或误删",
+      "severity": "warn",
+      "target": "all",
+      "pattern": "(?i)\\bDROP\\s+TABLE\\s+(?!IF\\s+EXISTS\\b)",
+      "message": "DROP TABLE 未使用 IF EXISTS（sql-sop E002 等价规则）",
+      "suggestion": "改为 DROP TABLE IF EXISTS；迁移脚本中 DROP 操作需配套 downgrade 回滚语句"
+    },
+    {
+      "id": "AI_SQL_TRUNCATE_CASCADE",
+      "description": "生产代码中的 TRUNCATE（尤其 CASCADE）绕过触发器与外键约束直接清表",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?i)\\bTRUNCATE\\s+(?:TABLE\\s+)?[\\w.\"`]+(?:\\s+CASCADE)?",
+      "message": "AI 红线：TRUNCATE 出现（CASCADE 将级联清空引用表），生产代码中几乎无合法场景",
+      "suggestion": "测试数据清理请限定在 test fixture；生产清理用带 WHERE 的 DELETE + 分批执行"
+    },
+    {
+      "id": "AI_GRANT_ALL_PRIVILEGES",
+      "description": "AI 生成数据库授权时倾向 GRANT ALL，违反最小权限原则",
+      "severity": "warn",
+      "target": "all",
+      "pattern": "(?i)\\bGRANT\\s+ALL\\s+(?:PRIVILEGES\\b)?",
+      "message": "GRANT ALL PRIVILEGES 权限过宽，AI 生成迁移脚本的常见偷懒模式",
+      "suggestion": "按应用实际需求授予 SELECT/INSERT/UPDATE/DELETE 最小集合；禁止应用账号拥有 DDL 权限"
+    },
+    {
+      "id": "AI_TF_PUBLIC_S3_ACL",
+      "description": "AI 生成 Terraform 默认公开 S3 桶（273K 银行 PDF 泄漏同类模式）",
+      "severity": "block",
+      "target": "*.tf",
+      "pattern": "acl\\s*=\\s*\"public",
+      "message": "AI 红线：S3 bucket ACL 设为 public-read/public-read-write，数据将公网暴露",
+      "suggestion": "删除 acl 属性（默认 private）；附加 aws_s3_bucket_public_access_block 全量阻断公开访问"
+    },
+    {
+      "id": "AI_TF_OPEN_SECURITY_GROUP",
+      "description": "AI 生成安全组规则常将 0.0.0.0/0 用于 ingress 全开端口",
+      "severity": "warn",
+      "target": "*.tf",
+      "pattern": "\"0\\.0\\.0\\.0/0\"",
+      "message": "检测到 0.0.0.0/0：若用于 ingress 且端口非 80/443，属于公网暴露高危配置（AI 生成 Terraform 的默认倾向）",
+      "suggestion": "ingress 限定具体 CIDR 或安全组引用；egress 全开属正常可豁免；22/3389/数据库端口绝不应对 0.0.0.0/0 开放"
+    },
+    {
+      "id": "AI_K8S_RBAC_WILDCARD",
+      "description": "AI 生成 K8s RBAC 时使用 * 通配 verbs/resources（全权授予，多起数据泄漏主因）",
+      "severity": "block",
+      "target": "*.yaml",
+      "pattern": "(?m)^\\s*-\\s*\"\\*\"\\s*$",
+      "message": "AI 红线：YAML 列表中出现 \"*\" 通配项——若为 RBAC verbs/resources/apiGroups 则为全权授予",
+      "suggestion": "RBAC 按资源名显式列举：resources: [\"pods\"], verbs: [\"get\", \"list\"]；若非 RBAC 文件请人工确认后豁免"
+    },
+    {
+      "id": "AI_DEBUG_MODE_ON",
+      "description": "AI 示例代码默认 DEBUG=True 被直接带入生产配置",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?im)\\bDEBUG\\s*=\\s*True\\b|\\bFLASK_DEBUG\\s*=\\s*1\\b|^\\s*debug:\\s*true\\s*$|\"debug\"\\s*:\\s*true",
+      "message": "AI 红线：DEBUG 模式硬编码开启，生产环境将泄露堆栈/配置/密钥",
+      "suggestion": "DEBUG 必须由环境变量驱动且默认 False：DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'"
+    },
+    {
+      "id": "AI_HARDCODED_CLOUD_CREDENTIAL",
+      "description": "AI 示例中的云服务密钥格式（sk-/AKIA/ghp_/xoxb）被复制为真实密钥硬编码",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?i)(sk-[a-zA-Z0-9]{20,}|AKIA[0-9A-Z]{16}|ghp_[a-zA-Z0-9]{30,}|xox[baprs]-[a-zA-Z0-9-]{10,})",
+      "message": "AI 红线：疑似硬编码云服务/OpenAI/GitHub/Slack 密钥（AI 常将示例密钥格式写入代码）",
+      "suggestion": "密钥一律走环境变量或密钥管理服务（KMS/Vault）；已入库密钥立即轮换并清洗 git 历史"
+    },
+    {
+      "id": "AI_SSL_VERIFY_DISABLED",
+      "description": "AI 为解决证书报错倾向直接关闭 TLS 验证",
+      "severity": "block",
+      "target": "all",
+      "pattern": "verify\\s*=\\s*False|rejectUnauthorized\\s*:\\s*false|InsecureSkipVerify\\s*[:=]\\s*true|NODE_TLS_REJECT_UNAUTHORIZED\\s*=\\s*['\"]?0",
+      "message": "AI 红线：TLS 证书验证被关闭，中间人攻击面完全打开",
+      "suggestion": "正确修复证书链（更新 CA bundle / 挂载企业根证书），禁止 verify=False 类绕过"
+    },
+    {
+      "id": "AI_CORS_WILDCARD_ORIGIN",
+      "description": "AI 生成 CORS 配置倾向 * 通配来源，与凭据共用时可被跨域窃取数据",
+      "severity": "warn",
+      "target": "all",
+      "pattern": "Access-Control-Allow-Origin[\"']?\\s*[:=,]\\s*[\"']?\\*|allow_origins\\s*=\\s*\\[\\s*[\"']\\*|origin\\s*:\\s*[\"']\\*[\"']",
+      "message": "CORS 允许任意来源（*），若接口返回敏感数据或允许凭据则为高危配置",
+      "suggestion": "显式列举允许的来源域名；Allow-Credentials 与 * 绝不可同时启用"
+    },
+    {
+      "id": "AI_DESTRUCTIVE_FS_OPERATION",
+      "description": "AI 生成递归删除/移动文件系统操作且缺少路径守卫（Kiro/terraform destroy 同类风险）",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "\\b(shutil\\.rmtree|os\\.removedirs|shutil\\.move)\\s*\\(",
+      "message": "破坏性文件系统操作：AI 生成的 rmtree/removedirs 缺少路径白名单与 dry-run 守卫",
+      "suggestion": "增加路径白名单校验（限定工作目录前缀）+ 默认 dry-run 模式 + 人工确认开关"
+    },
+    {
+      "id": "AI_UNSAFE_DESERIALIZATION",
+      "description": "AI 示例常用 pickle.load / yaml.load(无 SafeLoader) 处理输入，存在 RCE 风险",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "(?<!['\"\\w])pickle\\.loads?\\s*\\(|\\byaml\\.load\\s*\\((?![^)]*Loader\\s*=)",
+      "message": "不安全反序列化：pickle.load 可执行任意代码；yaml.load 未指定 SafeLoader",
+      "suggestion": "数据交换用 JSON；必须用 yaml 时 yaml.safe_load()；pickle 仅限可信内部数据"
+    },
+    {
+      "id": "AI_JWT_VERIFY_DISABLED",
+      "description": "AI 生成 JWT 校验代码时关闭签名验证或接受 none 算法",
+      "severity": "block",
+      "target": "python",
+      "pattern": "jwt\\.decode\\s*\\([^)]*verify\\s*=\\s*False|algorithms?\\s*=\\s*\\[\\s*[\"']none[\"']",
+      "message": "AI 红线：JWT 签名验证被关闭或接受 none 算法，token 可任意伪造",
+      "suggestion": "jwt.decode(token, key, algorithms=[\"RS256\"], options={\"verify_signature\": True})"
+    },
+    {
+      "id": "AI_CHMOD_777",
+      "description": "AI 解决权限问题时倾向直接 777 全开权限",
+      "severity": "warn",
+      "target": "all",
+      "pattern": "chmod\\s+777\\b|mode\\s*=\\s*0?777\\b|permissions:\\s*['\"]?0777",
+      "message": "权限 777 全开：任何用户可读写执行，AI 规避权限报错的典型偷懒模式",
+      "suggestion": "按最小权限设置 755/644；容器场景用 non-root 用户 + fsGroup"
+    },
+    {
+      "id": "AI_MOCK_IN_PRODUCTION_CODE",
+      "description": "AI 为满足导入依赖在非测试代码中引入 mock 库（Fowler《Archaeologist's Copilot》警示模式）",
+      "severity": "info",
+      "target": "python",
+      "pattern": "(?m)^\\s*(?:from\\s+unittest\\.mock|from\\s+mock\\s+import|import\\s+mock)\\b",
+      "message": "mock 库导入：若出现在生产代码（非 tests/ 目录），说明 AI 可能在用假实现绕过真实逻辑",
+      "suggestion": "mock 仅限测试代码；生产代码中出现时请审查是否绕过了脆弱实现（测试通过≠功能正确）"
+    },
+    {
+      "id": "AI_MASS_ASSIGNMENT_BOLA",
+      "description": "AI 生成 API 更新接口常直接 **request.body 全量赋值（Lovable BOLA 漏洞同类模式）",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "\\.update\\s*\\(\\s*\\*\\*?(?:request\\.|data\\b|payload)|for\\s+\\w+,\\s*\\w+\\s+in\\s+(?:request\\.(?:json|data|POST)|payload)\\.items\\(\\)\\s*:\\s*\\n\\s*setattr",
+      "message": "疑似批量赋值：请求体字段直接写入模型，可能越权修改 role/is_admin 等敏感字段（BOLA/质量赋值）",
+      "suggestion": "使用 DTO/Serializer 显式声明可写字段白名单；对象级鉴权（object-level authorization）逐条校验"
+    }
+  ]
+}

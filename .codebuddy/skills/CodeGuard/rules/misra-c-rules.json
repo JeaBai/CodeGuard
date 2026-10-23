@@ -1,0 +1,79 @@
+{
+  "_comment": "MISRA C:2012 子集规则清单 — 由 quality_embedded.py 声明式执行（仅 embedded 方言生效）",
+  "_version": "0.1.0",
+  "_scope": "embedded",
+  "_description": "嵌入式 C 专用规则集。通用 C/C++ 项目（generic 方言）永不加载此规则集，从架构上避免 MISRA 规则污染桌面/服务端 C 代码。每条规则映射 quality_embedded.py 中的检测函数。",
+
+  "rules": [
+    {
+      "id": "EMBEDDED_NO_DYNAMIC_ALLOC",
+      "misra_id": "Dir 4.12 / Rule 21.3",
+      "category": "embedded_memory",
+      "severity": "block",
+      "description": "禁止动态内存分配（malloc/calloc/realloc/free/new/delete）",
+      "rationale": "嵌入式系统 RAM 受限，动态分配导致堆碎片与分配失败，无法满足功能安全确定性要求",
+      "suggestion": "改用静态分配/内存池/固定大小缓冲区",
+      "detector": "quality_embedded._check_dynamic_alloc"
+    },
+    {
+      "id": "EMBEDDED_NO_RECURSION",
+      "misra_id": "Rule 17.2",
+      "category": "embedded_recursion",
+      "severity": "block",
+      "description": "禁止函数递归调用",
+      "rationale": "递归深度不可静态确定，嵌入式栈空间有限，递归直接导致栈溢出",
+      "suggestion": "改写为迭代实现",
+      "detector": "quality_embedded._check_recursion"
+    },
+    {
+      "id": "EMBEDDED_LIMIT_GOTO",
+      "misra_id": "Rule 15.1 / 15.2 / 15.3",
+      "category": "embedded_goto",
+      "severity": "warn",
+      "description": "限制 goto 使用（单函数超过阈值告警）",
+      "rationale": "goto 破坏结构化控制流，降低可读性与可证明性",
+      "suggestion": "改用 if/switch/break/continue 结构化控制流",
+      "detector": "quality_embedded._check_goto"
+    },
+    {
+      "id": "EMBEDDED_ISR_NO_BLOCKING",
+      "misra_id": "嵌入式最佳实践（非 MISRA）",
+      "category": "embedded_isr",
+      "severity": "block",
+      "description": "ISR 内禁止调用阻塞/重型函数（printf/延时/信号量/动态内存）",
+      "rationale": "ISR 应保持短小无阻塞，否则丢失中断或破坏实时性",
+      "suggestion": "ISR 内仅置标志位，实际处理移至主循环/任务队列",
+      "detector": "quality_embedded._check_isr_safety"
+    },
+    {
+      "id": "EMBEDDED_ISR_MAX_LENGTH",
+      "misra_id": "嵌入式最佳实践（非 MISRA）",
+      "category": "embedded_isr",
+      "severity": "warn",
+      "description": "ISR 函数体长度限制（80 行）",
+      "rationale": "过长的 ISR 增加中断延迟，影响系统实时响应",
+      "suggestion": "拆分 ISR，将耗时逻辑移到主循环",
+      "detector": "quality_embedded._check_isr_safety"
+    },
+    {
+      "id": "EMBEDDED_VOLATILE_REGISTER",
+      "misra_id": "嵌入式最佳实践（非 MISRA）",
+      "category": "embedded_volatile",
+      "severity": "warn",
+      "description": "内存映射寄存器指针必须 volatile",
+      "rationale": "非 volatile 寄存器访问会被编译器优化掉读/写，导致硬件行为错误",
+      "suggestion": "使用 *(volatile uint32_t*)0x... 形式访问寄存器",
+      "detector": "quality_embedded._check_volatile_register"
+    },
+    {
+      "id": "EMBEDDED_LOCAL_ARRAY_STACK",
+      "misra_id": "嵌入式最佳实践（非 MISRA）",
+      "category": "embedded_stack",
+      "severity": "warn",
+      "description": "局部大数组检测（估算占用栈空间超阈值）",
+      "rationale": "嵌入式栈空间通常仅数 KB，大局部数组直接导致栈溢出",
+      "suggestion": "大数组改用 static/全局/静态内存池",
+      "detector": "quality_embedded._check_local_array_stack"
+    }
+  ]
+}

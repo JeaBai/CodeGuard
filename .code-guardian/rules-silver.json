@@ -1,0 +1,342 @@
+{
+  "_comment": "CodeGuard 银级（业务系统）质量门禁预设 — 适合中型项目/业务线/内部工具",
+  "_version": "2.1.0",
+  "_level": "silver",
+  "_description": "银级门禁适用于业务系统、中型项目、内部管理后台、非核心数据面服务。阈值介于基础扫描与金级核心系统之间，平衡质量要求与开发效率。",
+  "_usage": "将本文件重命名为 rules.json 并放置于项目根目录的 .code-guardian/ 文件夹即可自动生效。或通过 --rules 参数指定路径。引擎通过 _level 字段自动识别门禁级别并切换阈值。",
+  "_comparison": "银级 vs 金级：圈复杂度放宽 25%（10 vs 8），嵌套深度放宽 33%（4 vs 3），文件行数放宽 50%（300 vs 200），断崖规则从 12 条减至 6 条（保留安全红线，豁免架构级约束）",
+
+  "ignorePaths": {
+    "_comment": "排除路径：扫描时跳过以下目录/文件模式",
+    "patterns": [
+      "**/_shared/**",
+      "**/*.min.js",
+      "**/*.min.css",
+      "**/node_modules/**",
+      "**/vendor/**",
+      "**/__pycache__/**",
+      "**/.git/**",
+      "**/.terraform/**",
+      "**/*.ttf",
+      "**/*.woff*",
+      "**/AI_辅助编程下企业级测试工程实践调研/**",
+      "**/charts.js",
+      "tests/_scan_full.py",
+      "tests/_analyze_issues.py"
+    ]
+  },
+
+  "thresholds": {
+    "_comment": "银级阈值：圈复杂度 WARN 10/BLOCK 12（宽松于金级 CC 8/10）；嵌套深度 WARN 4/BLOCK 5；文件行数 WARN 300/BLOCK 450。适合业务系统快速迭代节奏。",
+    "cyclomatic_complexity_warn": 10,
+    "cyclomatic_complexity_block": 12,
+    "max_function_params_warn": 5,
+    "max_function_params_block": 7,
+    "max_nesting_warn": 4,
+    "max_nesting_block": 5,
+    "max_class_lines_warn": 300,
+    "max_class_lines_block": 450,
+    "max_class_methods_warn": 15,
+    "max_interface_methods_warn": 10,
+    "duplicate_lines_warn": 6,
+    "duplicate_lines_block": 10,
+    "cross_file_duplicate_block": 20,
+    "max_file_lines_warn": 300,
+    "max_file_lines_block": 450,
+    "test_coverage_min_pct": 60
+  },
+
+  "rules": [
+    {
+      "id": "SILVER_NO_BARE_EXCEPT",
+      "description": "禁止裸 except（未指定异常类型的捕获）",
+      "severity": "block",
+      "target": "python",
+      "pattern": "^\\s*except\\s*:",
+      "message": "银级禁则：禁止使用裸 except:，必须指定具体异常类型",
+      "suggestion": "使用 except SpecificError as e: 捕获具体异常，避免吞掉 KeyboardInterrupt/SystemExit"
+    },
+    {
+      "id": "SILVER_NO_MUTABLE_DEFAULT",
+      "description": "禁止可变类型作为函数参数默认值",
+      "severity": "block",
+      "target": "python",
+      "pattern": "def \\w+\\([^)]*=\\s*(\\[\\]|\\{\\}|set\\(\\)|dict\\(\\)|list\\(\\))",
+      "message": "银级禁则：禁止使用可变类型作为函数参数默认值",
+      "suggestion": "使用 None 作默认值，函数体内部初始化：if x is None: x = []"
+    },
+    {
+      "id": "SILVER_NO_WILDCARD_IMPORT",
+      "description": "禁止通配符导入（命名空间污染）",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "^from \\S+ import \\*$",
+      "message": "银级建议：避免使用 from module import *，污染命名空间",
+      "suggestion": "显式导入需要的名称：from module import Foo, Bar"
+    },
+    {
+      "id": "SILVER_NO_BROAD_EXCEPTION",
+      "description": "禁止直接捕获 Exception/BaseException",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "except\\s+(Exception|BaseException)",
+      "message": "银级建议：捕获 Exception/BaseException 范围过宽",
+      "suggestion": "限制为具体异常类型，除非在错误边界/重试逻辑中确有必要"
+    },
+    {
+      "id": "SILVER_NO_PRINT_PRODUCTION",
+      "description": "生产代码避免 print() 调试输出",
+      "severity": "info",
+      "target": "python",
+      "pattern": "\\bprint\\s*\\(",
+      "message": "银级提醒：生产代码建议避免 print() 输出（CLI 工具可豁免）",
+      "suggestion": "使用 logging.getLogger(__name__).info/debug/error() 结构化日志",
+      "expected_precision": 0.60
+    },
+    {
+      "id": "SILVER_NO_CONSOLE_LOG",
+      "description": "前端生产代码禁止 console.log",
+      "severity": "warn",
+      "target": "javascript",
+      "pattern": "console\\.(log|warn|error|debug|info)\\s*\\(",
+      "message": "银级建议：避免保留 console 调试输出",
+      "suggestion": "使用结构化日志库（如 winston/pino），构建时剥离 console 调用"
+    },
+    {
+      "id": "SILVER_NO_ANY_TYPE",
+      "description": "TypeScript 避免使用 any 类型",
+      "severity": "warn",
+      "target": "javascript",
+      "pattern": ":\\s*any\\b",
+      "message": "银级建议：避免使用 any 类型逃逸",
+      "suggestion": "替换为具体类型、泛型 T、unknown + 类型守卫"
+    },
+    {
+      "id": "SILVER_NO_SYNC_IO",
+      "description": "Node.js 避免同步 I/O 阻塞事件循环",
+      "severity": "warn",
+      "target": "javascript",
+      "pattern": "\\b(readFileSync|writeFileSync|existsSync|mkdirSync|rmdirSync|unlinkSync)\\s*\\(",
+      "message": "银级建议：避免同步 I/O 操作阻塞事件循环",
+      "suggestion": "使用 fs/promises 异步版本：await fs.readFile()"
+    },
+    {
+      "id": "SILVER_USE_STRICT_EQUAL",
+      "description": "JavaScript 使用严格等于避免类型转换",
+      "severity": "info",
+      "target": "javascript",
+      "pattern": "(?<![!=!])(?<![=])(==|!=)(?!=)",
+      "message": "银级提醒：建议使用 === / !== 严格等于",
+      "suggestion": "=== 替代 ==，!== 替代 !="
+    },
+    {
+      "id": "SILVER_NO_MAGIC_NUMBER",
+      "description": "避免未命名的魔法数字",
+      "severity": "info",
+      "target": "python|javascript|java|go|csharp|rust",
+      "pattern": "(?<![\\w.#$'\"=/])([3-9]\\d{2,4}|\\d{5,})(?!\\s*(?:年|月|日|px|em|rem|%|[A-Z_]))(?![\\w])",
+      "message": "银级提醒：疑似魔法数字，建议使用命名常量",
+      "suggestion": "使用命名常量替代：const MAX_RETRY_COUNT = 5",
+      "expected_precision": 0.94
+    },
+    {
+      "id": "SILVER_NO_TODO_WITHOUT_TICKET",
+      "description": "TODO 注释建议关联工单编号",
+      "severity": "info",
+      "target": "python|javascript|java|go|csharp|rust",
+      "pattern": "\\bTODO\\b(?!\\s*[\\(:]\\s*[#A-Za-z]+[-_]?\\d+)",
+      "message": "银级提醒：TODO 注释建议关联工单或需求编号",
+      "suggestion": "改为 TODO(#ISSUE_ID): 说明 或 FIXME(PROJ-123): 说明"
+    },
+    {
+      "id": "SILVER_NO_HARDCODED_URL",
+      "description": "避免硬编码外部 URL/IP 地址",
+      "severity": "warn",
+      "target": "all",
+      "pattern": "https?://(?!localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0)[^\\s\"'`]+",
+      "message": "银级建议：避免硬编码外部 URL，环境变更时易导致事故",
+      "suggestion": "通过环境变量或配置中心注入：os.getenv('API_BASE_URL')",
+      "expected_precision": 0.80
+    },
+    {
+      "id": "SILVER_NO_SQL_CONCAT",
+      "description": "禁止 SQL 字符串拼接（含 f-string）",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\\s.*(?:f['\"]%|\\+|format\\()",
+      "message": "银级禁则：SQL 字符串拼接导致注入漏洞",
+      "suggestion": "使用参数化查询：cursor.execute('SELECT * FROM t WHERE id = ?', (id,))"
+    },
+    {
+      "id": "SILVER_NO_OS_SYSTEM",
+      "description": "禁止使用 os.system/popen 执行外部命令",
+      "severity": "block",
+      "target": "python",
+      "pattern": "(?<!['\"\\w/,])\\b(os\\.(system|popen)|subprocess\\.(call|run|Popen)\\s*\\(\\s*['\"])",
+      "message": "银级禁则：外部命令执行存在命令注入风险",
+      "suggestion": "使用 subprocess.run([...], shell=False) 传参数组 + shlex.quote()"
+    },
+    {
+      "id": "SILVER_NO_EMPTY_EXCEPT",
+      "description": "禁止空的异常处理块",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "^(?![ \\t]*#).*\\bexcept[^:]*:.*(?:pass\\s*$|\\n\\s*pass)",
+      "message": "银级建议：空 except 块吞掉所有异常信息",
+      "suggestion": "最低限度添加 logger.exception('描述') 记录异常上下文",
+      "expected_precision": 0.75
+    },
+    {
+      "id": "SILVER_NO_EVAL",
+      "description": "禁止使用 eval/exec/Function 动态执行",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?<!['\"\\w])\\b(eval|exec|Function)\\s*\\(",
+      "message": "银级禁则：动态代码执行存在代码注入风险",
+      "suggestion": "使用安全的替代方案：JSON.parse() 替代表达式求值",
+      "case_sensitive": true
+    },
+    {
+      "id": "SILVER_USE_DATACLASS",
+      "description": "Python 数据载体类建议使用 dataclass",
+      "severity": "info",
+      "target": "python",
+      "pattern": "class \\w+(?:\\(.*\\))?:\\s*\\n\\s+def __init__\\(self\\s*,\\s*(?!.*super)",
+      "message": "银级建议：纯数据初始化类可考虑 @dataclass 减少样板代码",
+      "suggestion": "使用 @dataclass + 类型注解：from dataclasses import dataclass"
+    },
+    {
+      "id": "SILVER_NO_GLOBAL_STATE",
+      "description": "避免模块级可变全局状态",
+      "severity": "info",
+      "target": "python",
+      "pattern": "^(?!def|class|import|from|#|if __name__|[A-Z_]+ = )([a-z_]\\w*)\\s*=\\s*",
+      "message": "银级提醒：非大写常量模块级赋值可能引入隐式全局状态",
+      "suggestion": "将全局状态封装为类/单例，或通过依赖注入传递",
+      "expected_precision": 0.80,
+      "case_sensitive": true
+    },
+    {
+      "id": "SILVER_NO_UNSAFE",
+      "description": "Rust unsafe 块检测",
+      "severity": "warn",
+      "target": "rust",
+      "pattern": "\\bunsafe\\s*(\\{|fn|impl)",
+      "message": "银级建议：unsafe 块绕过 Rust 内存安全保证，请确认必要性",
+      "suggestion": "尽可能使用安全 Rust 替代；若必须使用 unsafe 请用 // SAFETY: 注释说明",
+      "expected_precision": 0.95
+    },
+    {
+      "id": "SILVER_NO_UNWRAP",
+      "description": "Rust unwrap() 调用检测",
+      "severity": "warn",
+      "target": "rust",
+      "pattern": "\\.unwrap\\s*\\(",
+      "message": "银级建议：.unwrap() 在 None/Err 时 panic",
+      "suggestion": "使用 ? 操作符传播错误或 .unwrap_or()/.unwrap_or_else()",
+      "expected_precision": 0.92
+    },
+    {
+      "id": "SILVER_NO_PRINT_RUST",
+      "description": "Rust 生产代码避免 println!/print!",
+      "severity": "info",
+      "target": "rust",
+      "pattern": "\\bprintln!|\\bprint!\\b",
+      "message": "银级提醒：生产代码建议避免 println!/print! 标准输出",
+      "suggestion": "使用 log::info!/error!() + env_logger 等结构化日志框架",
+      "expected_precision": 0.85
+    },
+    {
+      "id": "SILVER_NO_PRINT_CS",
+      "description": "C# 生产代码避免 Console.WriteLine",
+      "severity": "info",
+      "target": "csharp",
+      "pattern": "Console\\.(Write|WriteLine)\\s*\\(",
+      "message": "银级提醒：生产代码建议避免 Console.WriteLine() 标准输出",
+      "suggestion": "使用 ILogger.LogInformation()/LogError() 或 Serilog/NLog",
+      "expected_precision": 0.88
+    },
+    {
+      "id": "SILVER_NO_PRINT_GO",
+      "description": "Go 生产代码避免 fmt.Print",
+      "severity": "info",
+      "target": "go",
+      "pattern": "fmt\\.(Print|Printf|Println|Fprint|Fprintf|Fprintln)\\s*\\(",
+      "message": "银级提醒：生产代码建议避免 fmt.Print() 标准输出",
+      "suggestion": "使用 log/slog 包或 zap/zerolog 等结构化日志库",
+      "expected_precision": 0.88
+    },
+    {
+      "id": "SILVER_NO_PRINT_JAVA",
+      "description": "Java 生产代码避免 System.out.print",
+      "severity": "info",
+      "target": "java",
+      "pattern": "System\\.(out|err)\\.(print|println|printf)\\s*\\(",
+      "message": "银级提醒：生产代码建议避免 System.out.print() 标准输出",
+      "suggestion": "使用 slf4j Logger.info()/error() 或 log4j2 结构化日志",
+      "expected_precision": 0.88
+    },
+
+    {
+      "id": "SILVER_TEST_COVERAGE_GATE",
+      "description": "核心模块测试覆盖率门禁 — 银级要求 ≥ 60%",
+      "severity": "warn",
+      "target": "python|javascript|java|go|csharp|rust",
+      "pattern": null,
+      "_engine_check": "test_coverage",
+      "message": "银级建议：核心模块测试覆盖率低于 60%。建议为核心业务逻辑编写单元测试。",
+      "suggestion": "为关键业务逻辑编写单元测试，CI 集成 pytest --cov/istanbul/jacoco 并设置 coverage >= 60%",
+      "_note": "此规则由引擎内置覆盖率检测逻辑执行"
+    },
+    {
+      "id": "SILVER_DB_MIGRATION_SAFETY",
+      "description": "数据库迁移脚本建议包含回滚语句",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "(?m)^def upgrade\\(\\):.*?(?=\\ndef downgrade)",
+      "message": "银级建议：数据库迁移脚本的 upgrade() 无对应 downgrade() 回滚函数",
+      "suggestion": "为每个 upgrade() 编写对称的 downgrade() 函数",
+      "expected_precision": 0.85
+    },
+    {
+      "id": "SILVER_STRUCTURED_LOGGING",
+      "description": "建议使用结构化日志而非裸文本拼接",
+      "severity": "info",
+      "target": "python",
+      "pattern": "(?m)^\\s*(?:logger|log|logging)\\.(?:info|debug|warn|error|critical|exception)\\s*\\(\\s*f[\"']",
+      "message": "银级提醒：日志输出使用 f-string 拼接而非结构化参数",
+      "suggestion": "使用结构化参数: logger.info('user_login', extra={'user_id': uid})",
+      "expected_precision": 0.75
+    },
+    {
+      "id": "SILVER_INPUT_VALIDATION",
+      "description": "API 入口建议对外部输入执行校验",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "(?m)(?:def (?:get|post|put|delete|patch)\\s*\\(|@app\\.(?:route|get|post|put|delete|patch)\\s*\\(|class \\w+\\(.*BaseModel\\):.*\\n(?!.*(?:Field\\(|validator|@validator|@field_validator|conint|constr|confloat)))",
+      "message": "银级建议：API 入口参数缺少校验声明（类型/长度/范围）",
+      "suggestion": "Python: pydantic Field(gt=0, lt=100) / constr(min_length=1)；Java: @Valid + @NotNull/@Size",
+      "expected_precision": 0.60
+    },
+    {
+      "id": "SILVER_SENSITIVE_DATA_ENCRYPTION",
+      "description": "避免明文存储敏感数据",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?im)(?:password|passwd|secret|api_key|token|private_key)\\s*=\\s*[\"'][^\"']{4,}[\"']\\s*(?:#|$|\\n)(?!.*(?:encrypt|hash|bcrypt|argon2|scrypt|fernet|aes|kms|vault))",
+      "message": "银级禁则：敏感字段疑似明文赋值且未检测到加密/哈希处理",
+      "suggestion": "密码使用 bcrypt/argon2 哈希；密钥走 KMS/Vault 注入；传输层 TLS 1.2+",
+      "expected_precision": 0.65
+    },
+    {
+      "id": "SILVER_LOG_CREDENTIAL_LEAK",
+      "description": "避免在日志中输出凭据信息",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "(?im)(?:logger\\.|logging\\.|log\\.|print\\s*\\()\\s*.*(?:password|passwd|secret|token|api_key|private_key|credential)",
+      "message": "银级建议：日志语句中包含 password/token/secret 等敏感字段名",
+      "suggestion": "日志脱敏：logger.info('auth', extra={'user': uid}) 不输出凭据值",
+      "expected_precision": 0.80
+    }
+  ]
+}

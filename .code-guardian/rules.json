@@ -1,10 +1,30 @@
 {
-  "_comment": "CodeGuard 金级（核心系统）质量门禁预设 — 腾讯金级标准",
-  "_version": "2.0.9",
-  "_usage": "将此文件放置于项目根目录的 .code-guardian/ 文件夹即可自动生效",
+  "_comment": "CodeGuard 金级（核心系统）质量门禁预设 — 大厂核心系统硬性标准（对齐 Google/Meta/SonarQube/McCabe 实证阈值）",
+  "_version": "2.2.0",
+  "_level": "gold",
+  "_c_dialect": "auto",
+  "_c_dialect_description": "C/C++ 方言识别（v2.2.0）：auto=自动检测（RTOS头/ISR/寄存器宏/链接脚本信号）；generic=强制通用 C/C++；embedded=强制嵌入式 C。embedded 方言启用 MISRA C:2012 子集 + ISR 安全 + volatile 正确性 + 栈深度检测，通用 C/C++ 规则（动态内存/递归/goto/异常）与嵌入式规则互不污染。",
+  "_description": "金级门禁适用于核心业务系统、支付链路、用户数据面、基础设施组件。阈值对齐 McCabe 圈复杂度理论（CC≤10 为简单代码）及大厂内部核心系统代码评审标准。",
+  "_usage": "将此文件放置于项目根目录的 .code-guardian/ 文件夹即可自动生效。引擎通过 _level 字段自动识别门禁级别并切换阈值。",
+
+  "ignorePaths": {
+    "_comment": "排除路径：扫描时跳过以下目录/文件模式，避免第三方压缩库/生成文件产生误报；tests/fixtures 下的违例样本是测试夹具（故意违反规则），不参与本仓库自身门禁",
+    "patterns": [
+      "**/*.min.js",
+      "**/*.min.css",
+      "**/node_modules/**",
+      "**/vendor/**",
+      "**/__pycache__/**",
+      "**/.git/**",
+      "**/.terraform/**",
+      "**/*.ttf",
+      "**/*.woff*",
+      "**/tests/fixtures/**"
+    ]
+  },
 
   "thresholds": {
-    "_comment": "金级阈值：覆盖 CodeGuard 默认值，对齐大厂核心系统标准",
+    "_comment": "金级阈值：对齐大厂核心系统硬性标准。CC WARN 8/BLOCK 10（McCabe 原论文建议 ≤10 为简单代码）；嵌套深度 WARN 3/BLOCK 4（Google 内部 style guide）；文件行数 WARN 200/BLOCK 350（阿里巴巴开发手册 80 行方法级 × 类体扩展）",
     "cyclomatic_complexity_warn": 8,
     "cyclomatic_complexity_block": 10,
     "max_function_params_warn": 4,
@@ -12,14 +32,15 @@
     "max_nesting_warn": 3,
     "max_nesting_block": 4,
     "max_class_lines_warn": 200,
-    "max_class_lines_block": 400,
-    "max_class_methods_warn": 10,
+    "max_class_lines_block": 350,
+    "max_class_methods_warn": 12,
     "max_interface_methods_warn": 8,
-    "duplicate_lines_warn": 4,
-    "duplicate_lines_block": 6,
+    "duplicate_lines_warn": 5,
+    "duplicate_lines_block": 8,
     "cross_file_duplicate_block": 15,
     "max_file_lines_warn": 200,
-    "max_file_lines_block": 400
+    "max_file_lines_block": 350,
+    "test_coverage_min_pct": 80
   },
 
   "rules": [
@@ -66,7 +87,8 @@
       "target": "python",
       "pattern": "\\bprint\\s*\\(",
       "message": "金级建议：生产代码避免使用 print() 输出（CLI/Script 工具除外）",
-      "suggestion": "使用 logging.getLogger(__name__).info/debug/error() 结构化日志；若为 CLI 工具请手动忽略"
+      "suggestion": "使用 logging.getLogger(__name__).info/debug/error() 结构化日志；若为 CLI 工具请手动忽略",
+      "expected_precision": 0.60
     },
     {
       "id": "GOLD_NO_CONSOLE_LOG",
@@ -106,19 +128,20 @@
     },
     {
       "id": "GOLD_NO_MAGIC_NUMBER",
-      "description": "禁止未命名的魔法数字",
+      "description": "禁止未命名的魔法数字（仅对源代码文件生效，排除 .json/.yaml/.toml 等配置文件）",
       "severity": "info",
-      "target": "all",
+      "target": "python|javascript|java|go|csharp|rust",
       "pattern": "(?<![\\w.#$'\"=/])([3-9]\\d{2,4}|\\d{5,})(?!\\s*(?:年|月|日|px|em|rem|%|[A-Z_]))(?![\\w])",
       "message": "金级提醒：疑似魔法数字，降低代码可读性和可维护性",
-      "suggestion": "使用命名常量替代：const MAX_RETRY_COUNT = 5"
+      "suggestion": "使用命名常量替代：const MAX_RETRY_COUNT = 5",
+      "expected_precision": 0.94
     },
     {
       "id": "GOLD_NO_TODO_WITHOUT_TICKET",
-      "description": "TODO 必须关联工单编号",
+      "description": "源代码 TO-DO 注释必须关联工单编号",
       "severity": "warn",
-      "target": "all",
-      "pattern": "\\bTODO\\s*[(:]?\\s*$",
+      "target": "python|javascript|java|go|csharp|rust",
+      "pattern": "\\bTODO\\b(?!\\s*[\\(:]\\s*[#A-Za-z]+[-_]?\\d+)",
       "message": "金级建议：TODO 注释必须关联工单或需求编号（格式: TODO(#12345) 或 TODO(PROJ-789)）",
       "suggestion": "改为 TODO(#ISSUE_ID): 说明 或 FIXME(PROJ-123): 说明，确保可追踪"
     },
@@ -129,7 +152,8 @@
       "target": "all",
       "pattern": "https?://(?!localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0)[^\\s\"'`]+",
       "message": "金级禁则：禁止硬编码外部 URL，环境变更时易导致生产事故",
-      "suggestion": "通过环境变量或配置中心注入：os.getenv('API_BASE_URL')"
+      "suggestion": "通过环境变量或配置中心注入：os.getenv('API_BASE_URL')",
+      "expected_precision": 0.80
     },
     {
       "id": "GOLD_NO_SQL_CONCAT",
@@ -154,9 +178,10 @@
       "description": "禁止空的异常处理块",
       "severity": "block",
       "target": "python",
-      "pattern": "^(?![ \\t]*#).*\\bexcept[^:]*:\\s*pass\\s*$",
+      "pattern": "^(?![ \\t]*#).*\\bexcept[^:]*:.*(?:pass\\s*$|\\n\\s*pass)",
       "message": "金级禁则：空 except 块吞掉所有异常信息，排查故障困难",
-      "suggestion": "最低限度添加 logger.exception('描述') 记录异常上下文，或 raise 重新抛出"
+      "suggestion": "最低限度添加 logger.exception('描述') 记录异常上下文，或 raise 重新抛出",
+      "expected_precision": 0.75
     },
     {
       "id": "GOLD_NO_EVAL",
@@ -165,14 +190,15 @@
       "target": "all",
       "pattern": "(?<!['\"\\w])\\b(eval|exec|Function)\\s*\\(",
       "message": "金级禁则：动态代码执行存在代码注入风险",
-      "suggestion": "使用安全的替代方案：JSON.parse() 替代 eval()；策略模式替代动态函数构造"
+      "suggestion": "使用安全的替代方案：JSON.parse() 替代表达式求值；策略模式替代动态函数构造",
+      "case_sensitive": true
     },
     {
       "id": "GOLD_USE_DATACLASS",
       "description": "Python 数据载体类建议使用 dataclass",
       "severity": "info",
       "target": "python",
-      "pattern": "class \\w+:\\s*\\n\\s+def __init__\\(self,\\s*(?!.*super)",
+      "pattern": "class \\w+(?:\\(.*\\))?:\\s*\\n\\s+def __init__\\(self\\s*,\\s*(?!.*super)",
       "message": "金级建议：纯数据初始化类可考虑 @dataclass 减少样板代码",
       "suggestion": "使用 @dataclass + 类型注解：from dataclasses import dataclass"
     },
@@ -183,7 +209,192 @@
       "target": "python",
       "pattern": "^(?!def|class|import|from|#|if __name__|[A-Z_]+ = )([a-z_]\\w*)\\s*=\\s*",
       "message": "金级建议：非大写常量模块级赋值可能引入隐式全局状态，影响可测试性",
-      "suggestion": "将全局状态封装为类/单例，或通过依赖注入传递；纯常量请使用 UPPER_CASE 命名"
+      "suggestion": "将全局状态封装为类/单例，或通过依赖注入传递；纯常量请使用 UPPER_CASE 命名",
+      "expected_precision": 0.80,
+      "case_sensitive": true
+    },
+    {
+      "id": "GOLD_NO_UNSAFE",
+      "description": "Rust unsafe 块检测",
+      "severity": "block",
+      "target": "rust",
+      "pattern": "\\bunsafe\\s*(\\{|fn|impl)",
+      "message": "金级禁则：unsafe 块/函数/实现绕过 Rust 内存安全保证",
+      "suggestion": "尽可能使用安全 Rust 替代；若必须使用 unsafe 请用 // SAFETY: 注释说明前提条件和安全不变量",
+      "expected_precision": 0.95
+    },
+    {
+      "id": "GOLD_NO_UNWRAP",
+      "description": "Rust unwrap() 调用检测",
+      "severity": "block",
+      "target": "rust",
+      "pattern": "\\.unwrap\\s*\\(",
+      "message": "金级禁则：.unwrap() 在 None/Err 时 panic，生产代码不可用",
+      "suggestion": "使用 ? 操作符传播错误、.unwrap_or()/.unwrap_or_else() 提供默认值、或 match 显式处理",
+      "expected_precision": 0.92
+    },
+    {
+      "id": "GOLD_NO_PRINT_RUST",
+      "description": "Rust 生产代码禁止 println!/print!",
+      "severity": "warn",
+      "target": "rust",
+      "pattern": "\\bprintln!|\\bprint!\\b",
+      "message": "金级建议：生产代码避免 println!/print! 标准输出",
+      "suggestion": "使用 log::info!/error!() + env_logger 等结构化日志框架；测试代码可用 println!",
+      "expected_precision": 0.85
+    },
+    {
+      "id": "GOLD_NO_PRINT_CS",
+      "description": "C# 生产代码禁止 Console.WriteLine",
+      "severity": "warn",
+      "target": "csharp",
+      "pattern": "Console\\.(Write|WriteLine)\\s*\\(",
+      "message": "金级建议：生产代码避免 Console.WriteLine() 标准输出",
+      "suggestion": "使用 ILogger.LogInformation()/LogError() 或 Serilog/NLog 结构化日志",
+      "expected_precision": 0.88
+    },
+    {
+      "id": "GOLD_NO_PRINT_GO",
+      "description": "Go 生产代码禁止 fmt.Print",
+      "severity": "warn",
+      "target": "go",
+      "pattern": "fmt\\.(Print|Printf|Println|Fprint|Fprintf|Fprintln)\\s*\\(",
+      "message": "金级建议：生产代码避免 fmt.Print() 标准输出",
+      "suggestion": "使用 log/slog 包或 zap/zerolog 等结构化日志库",
+      "expected_precision": 0.88
+    },
+    {
+      "id": "GOLD_NO_PRINT_JAVA",
+      "description": "Java 生产代码禁止 System.out.print",
+      "severity": "warn",
+      "target": "java",
+      "pattern": "System\\.(out|err)\\.(print|println|printf)\\s*\\(",
+      "message": "金级建议：生产代码避免 System.out.print() 标准输出",
+      "suggestion": "使用 slf4j Logger.info()/error() 或 log4j2 结构化日志",
+      "expected_precision": 0.88
+    },
+
+    {
+      "id": "GOLD_TEST_COVERAGE_GATE",
+      "description": "核心模块测试覆盖率门禁 — 未检测到测试文件或覆盖率低于 80% 阈值",
+      "severity": "block",
+      "target": "python|javascript|java|go|csharp|rust",
+      "pattern": null,
+      "_engine_check": "test_coverage",
+      "message": "金级禁则：核心模块缺少测试文件或测试覆盖率低于 80%。大厂核心系统上线硬性要求。",
+      "suggestion": "为所有公开接口编写单元测试，CI 集成 pytest --cov/istanbul/jacoco 并设置 coverage >= 80% 门禁",
+      "_note": "此规则由引擎内置覆盖率检测逻辑执行，不走 regex 匹配路径"
+    },
+    {
+      "id": "GOLD_API_VERSION_MANAGEMENT",
+      "description": "公开 API 接口必须声明版本号（URL 路径版本 / Header 版本 / 语义化版本）",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?im)(?:@app\\.(?:route|get|post|put|delete|patch)|@router\\.(?:get|post|put|delete|patch)|app\\.(?:get|post|put|delete|patch)|@Get|@Post|@Put|@Delete|@RequestMapping|@GetMapping|@PostMapping)\\s*\\(\\s*[\"'](?!.*(?:/v[0-9]+/|/api/[0-9]+/)).*[\"']",
+      "message": "金级禁则：公开 API 接口未声明版本号（如 /v1/、/api/v2/）。核心系统必须支持 API 版本管理以避免破坏性变更。",
+      "suggestion": "URL 路径版本: /api/v1/users；Header 版本: Accept-Version: v1；语义化版本: X-API-Version: 1.0.0",
+      "expected_precision": 0.70
+    },
+    {
+      "id": "GOLD_DB_MIGRATION_SAFETY",
+      "description": "数据库迁移脚本必须包含回滚（downgrade/rollback）语句",
+      "severity": "block",
+      "target": "python",
+      "pattern": "(?m)^def upgrade\\(\\):.*?(?=\\ndef downgrade)",
+      "message": "金级禁则：数据库迁移脚本的 upgrade() 无对应 downgrade() 回滚函数。核心系统迁移必须具备可逆性。",
+      "suggestion": "为每个 upgrade() 编写对称的 downgrade() 函数，确保迁移可回滚；DDL 变更需人工审批。",
+      "expected_precision": 0.85
+    },
+    {
+      "id": "GOLD_STRUCTURED_LOGGING",
+      "description": "核心系统禁止裸文本日志，必须使用结构化日志框架",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "(?m)^\\s*(?:logger|log|logging)\\.(?:info|debug|warn|error|critical|exception)\\s*\\(\\s*f[\"']",
+      "message": "金级建议：日志输出使用 f-string 拼接而非结构化参数，丢失了字段级别的索引与检索能力。",
+      "suggestion": "使用结构化参数: logger.info('user_login', extra={'user_id': uid}) 而非 f-string；Java 用 MDC；Go 用 slog.With()",
+      "expected_precision": 0.75
+    },
+    {
+      "id": "GOLD_HEALTH_CHECK_ENDPOINT",
+      "description": "核心服务必须暴露健康检查端点 /health 或 /healthz",
+      "severity": "block",
+      "target": "all",
+      "pattern": null,
+      "_engine_check": "health_endpoint",
+      "message": "金级禁则：核心服务未检测到 /health 或 /healthz 健康检查端点。K8s liveness/readiness probe 及负载均衡健康检查依赖此端点。",
+      "suggestion": "实现 GET /health（返回 200 + {'status':'ok'}）和 GET /ready（检查 DB/Redis 连接状态）",
+      "_note": "此规则由引擎内置健康检查检测逻辑执行，扫描路由注册代码"
+    },
+    {
+      "id": "GOLD_GRACEFUL_SHUTDOWN",
+      "description": "核心服务必须实现优雅关闭（SIGTERM/SIGINT 信号处理）",
+      "severity": "warn",
+      "target": "python",
+      "pattern": "(?m)^\\s*(?:signal\\.signal\\(signal\\.SIGTERM|signal\\.signal\\(signal\\.SIGINT|atexit\\.register|try:\\s*\\n.*KeyboardInterrupt)",
+      "message": "金级建议：服务入口未检测到 SIGTERM/SIGINT 信号处理或 atexit 钩子。核心系统必须支持优雅关闭以保证请求不丢失。",
+      "suggestion": "注册 SIGTERM 处理器：先停止接收新请求 → 等待进行中请求完成（graceful_timeout）→ 关闭 DB 连接池 → 退出",
+      "expected_precision": 0.65
+    },
+    {
+      "id": "GOLD_INPUT_VALIDATION",
+      "description": "API 入口必须对所有外部输入执行校验（类型/长度/范围/格式）",
+      "severity": "block",
+      "target": "python",
+      "pattern": "(?m)(?:def (?:get|post|put|delete|patch)\\s*\\(|@app\\.(?:route|get|post|put|delete|patch)\\s*\\(|class \\w+\\(.*BaseModel\\):.*\\n(?!.*(?:Field\\(|validator|@validator|@field_validator|conint|constr|confloat)))",
+      "message": "金级禁则：API 入口参数缺少校验声明（类型/长度/范围/正则）。OWASP Top 10: 注入与质量赋值根因。",
+      "suggestion": "Python: pydantic Field(gt=0, lt=100) / constr(min_length=1)；Java: @Valid + @NotNull/@Size；Go: go-playground/validator struct tags",
+      "expected_precision": 0.60
+    },
+    {
+      "id": "GOLD_AUTHORIZATION_CHECK",
+      "description": "数据访问操作前必须执行对象级鉴权检查",
+      "severity": "block",
+      "target": "python",
+      "pattern": "(?m)(?:def (?:get|update|delete)\\w*\\(\\s*(?:self|cls)\\s*,\\s*(?:request|req)\\s*,\\s*(?:\\w+_id|id)\\s*[^)]*\\)\\s*:\\s*\\n(?!.*(?:check_permission|has_permission|authorize|can_access|user_can|check_access)))",
+      "message": "金级禁则：资源访问方法缺少对象级鉴权检查（BOLA/IDOR 漏洞）。OWASP API Top 1: Broken Object Level Authorization。",
+      "suggestion": "在数据操作前调用 check_permission(user, resource_id, action) 或 Django-guardian/Spring Security @PreAuthorize",
+      "expected_precision": 0.55
+    },
+    {
+      "id": "GOLD_SENSITIVE_DATA_ENCRYPTION",
+      "description": "禁止明文存储敏感数据（密码/PII/密钥/Token）",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?im)(?:password|passwd|secret|api_key|token|private_key)\\s*=\\s*[\"'][^\"']{4,}[\"']\\s*(?:#|$|\\n)(?!.*(?:encrypt|hash|bcrypt|argon2|scrypt|fernet|aes|kms|vault))",
+      "message": "金级禁则：敏感字段疑似明文赋值且未检测到加密/哈希处理。GDPR/PCI-DSS/SOC2 合规红线。",
+      "suggestion": "密码使用 bcrypt/argon2 哈希；密钥走 KMS/Vault 注入；传输层 TLS 1.2+；落盘 AES-256-GCM 加密",
+      "expected_precision": 0.65
+    },
+    {
+      "id": "GOLD_LOG_CREDENTIAL_LEAK",
+      "description": "禁止在日志中输出密码/Token/密钥等凭据信息",
+      "severity": "block",
+      "target": "python",
+      "pattern": "(?im)(?:logger\\.|logging\\.|log\\.|print\\s*\\()\\s*.*(?:password|passwd|secret|token|api_key|private_key|credential)",
+      "message": "金级禁则：日志语句中包含 password/token/secret 等敏感字段名，存在凭据泄露至日志系统的风险。",
+      "suggestion": "日志脱敏：logger.info('auth', extra={'user': uid}) 不输出凭据值；使用 logging.Filter 自动掩码敏感字段",
+      "expected_precision": 0.80
+    },
+    {
+      "id": "GOLD_IDEMPOTENCY_DESIGN",
+      "description": "支付/扣款/库存扣减等关键写操作必须实现幂等性（幂等键/分布式锁）",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?im)(?:def (?:pay|charge|deduct|withdraw|transfer|refund|checkout|order|create_order|place_order)\\s*\\()(?!.*(?:idempotency|idempotent_key|idempotent|dedup_key|lock|redis_lock|unique_constraint|SELECT.*FOR UPDATE|UPSERT|ON CONFLICT))",
+      "message": "金级禁则：关键写操作函数缺少幂等性保护机制。核心系统中重复支付/重复扣款为 P0 事故。",
+      "suggestion": "引入幂等键（idempotency_key）+ Redis 分布式锁 + 数据库唯一约束三重保护；客户端重试携带相同幂等键",
+      "expected_precision": 0.55
+    },
+    {
+      "id": "GOLD_CONCURRENCY_CONTROL",
+      "description": "共享资源写操作必须使用乐观锁（version）或悲观锁（SELECT FOR UPDATE）",
+      "severity": "block",
+      "target": "all",
+      "pattern": "(?im)(?:UPDATE\\s+\\w+\\s+SET\\s+)(?!.*(?:version\\s*=\\s*version\\s*\\+\\s*1|WHERE\\s+version\\s*=\\s*|SELECT.*FOR UPDATE|CAS\\s|compare_and_swap|optimistic_lock|pessimistic_lock))",
+      "message": "金级禁则：UPDATE 语句未检测到乐观锁（version 字段）或悲观锁（SELECT FOR UPDATE）并发控制。核心系统并发写可能导致数据覆盖丢失。",
+      "suggestion": "乐观锁: UPDATE t SET col=v, version=version+1 WHERE id=? AND version=?；悲观锁: SELECT ... FOR UPDATE",
+      "expected_precision": 0.60
     }
   ]
 }

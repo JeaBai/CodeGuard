@@ -24,6 +24,8 @@ MULTILANG_IMPORT_PATTERNS = [
     (re.compile(r'import\s+(?:\(\s*)?(?:"([^"]+)"\s*)+\)?|"[^"]+"'), "go"),
     (re.compile(r'using\s+([\w.]+);'), "csharp"),
     (re.compile(r'use\s+([\w:]+);'), "rust"),
+    # C/C++ 族：#include "xxx.h" / #include <xxx.h>（v2.2.0 修复伪覆盖）
+    (re.compile(r'#\s*include\s*[<"]([^>"]+)[>"]'), "c"),
 ]
 
 _LANG_EXT_MAP = {
@@ -34,6 +36,19 @@ _LANG_EXT_MAP = {
     ".go": "go",
     ".cs": "csharp",
     ".rs": "rust",
+    # C/C++ 族（v2.2.0 修复伪覆盖：此前 C 文件 _detect_file_lang 返回 unknown 被静默跳过）
+    ".c": "c", ".h": "c",
+    ".cpp": "c", ".hpp": "c", ".cc": "c", ".cxx": "c",
+}
+
+# 嵌入式专用分层映射（v2.2.0）：嵌入式无 DDD 概念，映射到等价抽象层级
+# HAL/BSP/Driver/寄存器 → infrastructure（底层）；app/task/main → application（上层）
+_EMBEDDED_LAYER_MAP = {
+    "hal": "infrastructure", "bsp": "infrastructure", "board": "infrastructure",
+    "driver": "infrastructure", "drivers": "infrastructure", "mcu": "infrastructure",
+    "register": "infrastructure", "peripheral": "infrastructure",
+    "app": "application", "application": "application", "task": "application",
+    "tasks": "application", "middleware": "application",
 }
 
 
@@ -44,10 +59,20 @@ def _detect_file_lang(filepath):
 
 
 def _infer_layer(path_or_module):
-    """根据路径或模块名推断架构层级"""
+    """根据路径或模块名推断架构层级。
+
+    优先匹配嵌入式专用分层（HAL/BSP/Driver/App），回退到通用 DDD 分层。
+    """
+    lowered = path_or_module.lower()
+    # 1) 嵌入式分层（v2.2.0）
+    for kw, layer in _EMBEDDED_LAYER_MAP.items():
+        if kw in lowered:
+            return layer
+    # 2) 通用 DDD 分层 — 单词边界匹配（下划线视为段边界），避免子串误报
+    #    例：stdbool 含子串 "db" 不应判定为 infrastructure 层
     for layer, patterns in _core.LAYER_PATTERNS.items():
         for p in patterns:
-            if p in path_or_module:
+            if re.search(r'(?<![a-z0-9])' + re.escape(p) + r'(?![a-z0-9])', lowered):
                 return layer
     return "unknown"
 
@@ -97,7 +122,8 @@ class DependencyGraph:
                 if filepath_parts[-len(module_parts):] == module_parts:
                     results.append(filepath)
         
-        return results[:5]
+        # v3.0.0: 取消 [:5] 截断，去重后全量返回，避免模块匹配 >5 文件时循环依赖漏检
+        return list(dict.fromkeys(results))
     
     def find_cycles(self, max_depth=50):
         """DFS 检测循环依赖"""
@@ -183,8 +209,19 @@ def build_dependency_graph(source_files):
         try:
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
-        except Exception:
+        except (OSError, UnicodeDecodeError):
             continue
+        
+        # P0 修复：剥除 docstring/注释，避免 docstring 示例 import 被误判为真实 import
+        ext = os.path.splitext(filepath)[1].lower()
+        content = _core.strip_comments_and_strings(content, ext)
+        # P0 修复（延续）：仅保留模块级 import（行首无缩进），忽略函数内惰性导入
+        # （惰性导入是打破循环依赖的合法模式，不应被判为循环依赖）
+        if ext == ".py":
+            content = re.sub(
+                r'^[ \t]+(?:from\s+\S+\s+import\s+\S+|import\s+\S+)',
+                lambda m: ' ' * len(m.group()), content, flags=re.MULTILINE,
+            )
         
         for pattern, lang in MULTILANG_IMPORT_PATTERNS:
             if lang == file_lang:

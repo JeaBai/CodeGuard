@@ -1,0 +1,136 @@
+# ──────────────────────────────────────────────────────
+# CodeGuard 全链路 CI 门禁 — GitHub Actions 模板
+# 用途：合并到 main/master/release 时执行三步连环门禁
+# 放置：.github/workflows/codeguard-full-chain.yml
+# ──────────────────────────────────────────────────────
+
+name: CodeGuard 全链路质量门禁
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - release/*
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
+      - master
+      - release/*
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # ── 步骤 1: IaC 安全扫描 ──────────────────────────────
+  iac-scan:
+    name: IaC 安全扫描
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: iac-guardian 扫描
+        run: |
+          python .codebuddy/skills/iac-guardian/scripts/iac_scan.py \
+            --path . --format text
+        continue-on-error: false
+
+  # ── 步骤 2: 发布治理检视 ─────────────────────────────
+  governance-gate:
+    name: 发布治理检视
+    needs: iac-scan
+    if: always() && (needs.iac-scan.result == 'success' || needs.iac-scan.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 需求追溯 + 治理门禁
+        run: |
+          python .codebuddy/skills/governance-hub/scripts/governance_gate.py \
+            --mode release \
+            --path . \
+            --format text \
+            --cost-threshold 20 \
+            --coverage-ratio 0.8
+        continue-on-error: false
+
+  # ── 步骤 3: CodeGuard 质量门禁 ───────────────────────
+  codeguard-quality:
+    name: CodeGuard 金级质量门禁
+    needs: governance-gate
+    if: always() && (needs.governance-gate.result == 'success' || needs.governance-gate.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: CodeGuard 全量检测
+        run: |
+          python .codebuddy/skills/CodeGuard/scripts/quality_check.py \
+            --path . \
+            --mode full \
+            --format json > codeguard_result.json
+          EXIT_CODE=$?
+          python -c "
+          import json
+          with open('codeguard_result.json') as f:
+              data = json.load(f)
+          blocks = [i for i in data.get('issues', []) if i.get('severity') == 'block']
+          warns = [i for i in data.get('issues', []) if i.get('severity') == 'warn']
+          print(f'BLOCK: {len(blocks)} | WARN: {len(warns)} | TOTAL: {len(data.get(\"issues\", []))}')
+          "
+          if [ "$EXIT_CODE" -eq 2 ]; then
+            echo "❌ CodeGuard BLOCK — 存在阻断级质量问题"
+            exit 2
+          elif [ "$EXIT_CODE" -eq 1 ]; then
+            echo "⚠️  CodeGuard WARN — 存在质量问题（可人工放行）"
+          else
+            echo "✅ CodeGuard PASS"
+          fi
+        continue-on-error: false
+
+      - name: 上传质量报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeguard-report
+          path: codeguard_result.json
+          retention-days: 14
+
+  # ── 汇总 ─────────────────────────────────────────────
+  chain-summary:
+    name: 门禁汇总
+    needs: [iac-scan, governance-gate, codeguard-quality]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 生成门禁态势
+        run: |
+          echo "## CodeGuard 全链路门禁态势" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 阶段 | 门禁 | 结果 |" >> $GITHUB_STEP_SUMMARY
+          echo "|:---:|------|:---:|" >> $GITHUB_STEP_SUMMARY
+          echo "| 1/3 | iac-guardian IaC 安全扫描 | ${{ needs.iac-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 2/3 | governance-hub 发布治理 | ${{ needs.governance-gate.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 3/3 | CodeGuard 金级质量 | ${{ needs.codeguard-quality.result }} |" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.codeguard-quality.result }}" != "success" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ 全链路门禁未通过，请修复上述 BLOCK 项后重新提交" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ 全链路门禁通过" >> $GITHUB_STEP_SUMMARY
+          fi

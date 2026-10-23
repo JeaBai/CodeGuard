@@ -1,0 +1,43 @@
+{
+  "_comment": "CodeGuard 行业配置选择器 — 控制门禁规则集的行业维度选择",
+  "_version": "1.0.0",
+  "_description": "industry=auto 时自动检测项目行业特征；手动指定时直接加载对应规则集。gate_level 控制金/银/铜级别。asil_level 仅 safety 行业有效。",
+
+  "industry": "web",
+  "gate_level": "gold",
+  "asil_level": null,
+
+  "_options": {
+    "industry": ["auto", "web", "embedded", "safety"],
+    "gate_level": ["gold", "silver", "bronze"],
+    "asil_level": [null, "A", "B", "C", "D"]
+  },
+
+  "_profile_mapping": {
+    "web+gold": null,
+    "web+silver": "rules-silver.json",
+    "embedded+gold": "profiles/embedded-gold.json",
+    "embedded+silver": "profiles/embedded-silver.json",
+    "safety+gold": "profiles/safety-gold-asil-dc.json",
+    "safety+silver": "profiles/safety-silver-asil-ba.json"
+  },
+
+  "_auto_detect_hints": {
+    "embedded_signals": [
+      "*.c / *.h 文件 + ISR/volatile/寄存器宏",
+      "Cargo.toml + no_std/cortex_m/embedded_hal",
+      "链接脚本 (*.ld) / 启动文件 (*_startup.s/*.s)",
+      "Makefile/CMakeLists.txt + 交叉编译工具链 (arm-none-eabi-*)"
+    ],
+    "safety_signals": [
+      "文档含 ISO 26262 / ASIL / IEC 61508 / IEC 62304",
+      "存在 safety/ 或 asil/ 目录",
+      "配置文件含 functional_safety 标记"
+    ],
+    "web_signals": [
+      "package.json / requirements.txt / go.mod / pom.xml",
+      "Dockerfile / docker-compose.yml",
+      ".env / app.yaml / server.js / app.py"
+    ]
+  }
+}

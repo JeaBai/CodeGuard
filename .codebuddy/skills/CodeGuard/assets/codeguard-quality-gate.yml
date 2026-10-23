@@ -1,0 +1,98 @@
+# ──────────────────────────────────────────────────────
+# CodeGuard 质量门禁 — GitHub Actions 模板
+# 用途：Pull Request 触发金级质量门禁
+# 放置：.github/workflows/codeguard-quality-gate.yml
+# ──────────────────────────────────────────────────────
+
+name: CodeGuard 金级质量门禁
+
+on:
+  pull_request:
+    paths:
+      - '**/*.py'
+      - '**/*.js'
+      - '**/*.ts'
+      - '**/*.java'
+      - '**/*.go'
+      - '**/*.rs'
+      - '**/*.cpp'
+      - '**/*.cs'
+  push:
+    branches:
+      - 'main'
+      - 'master'
+      - 'release/*'
+
+jobs:
+  codeguard:
+    name: CodeGuard 质量检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 检测变更文件（增量模式）
+        id: diff
+        run: |
+          CHANGED=$(git diff --name-only --diff-filter=ACMR origin/${{ github.base_ref || github.event.before }}..HEAD \
+            | grep -E '\.(py|js|ts|java|go|rs|cpp|cs)$' | wc -l)
+          echo "changed_count=$CHANGED" >> $GITHUB_OUTPUT
+
+      - name: CodeGuard 增量检测
+        if: github.event_name == 'pull_request' && steps.diff.outputs.changed_count != '0'
+        run: |
+          python .codebuddy/skills/CodeGuard/scripts/quality_check.py \
+            --path . \
+            --mode diff \
+            --format json > codeguard_result.json
+          EXIT_CODE=$?
+          python -c "
+          import json
+          with open('codeguard_result.json') as f:
+              d = json.load(f)
+          print(f'================================================================')
+          print(f'CodeGuard 质量报告')
+          print(f'================================================================')
+          print(f'总问题: {d[\"summary\"][\"total\"]} | BLOCK: {d[\"summary\"][\"blocks\"]} '
+                f'| WARN: {d[\"summary\"][\"warns\"]} | INFO: {d[\"summary\"][\"infos\"]}')
+          if d.get('confidence_stats'):
+              cs = d['confidence_stats']
+              print(f'平均置信度: {cs[\"avg\"]}% (min={cs[\"min\"]}% max={cs[\"max\"]}%)')
+          print(f'================================================================')
+          for i in d['issues']:
+              if i['severity'] in ('block', 'warn'):
+                  print(f'[{i[\"severity\"].upper()}] {i[\"category\"]} {i[\"file\"]}:{i[\"line\"]}')
+                  print(f'        {i[\"message\"]}')
+                  if i.get('suggestion'):
+                      print(f'        修复: {i[\"suggestion\"]}')
+          "
+          exit $EXIT_CODE
+
+      - name: CodeGuard 全量检测（push 事件）
+        if: github.event_name == 'push'
+        run: |
+          python .codebuddy/skills/CodeGuard/scripts/quality_check.py \
+            --path . \
+            --mode team \
+            --format json > codeguard_result.json
+          EXIT_CODE=$?
+          python -c "
+          import json
+          with open('codeguard_result.json') as f:
+              d = json.load(f)
+          print(f'CodeGuard 全量检测完成: {d[\"summary\"][\"total\"]} 问题')
+          blocks = [i for i in d['issues'] if i['severity'] == 'block']
+          if blocks:
+              for b in blocks[:10]:
+                  print(f'[BLOCK] {b[\"category\"]} {b[\"file\"]}:{b[\"line\"]} {b[\"message\"][:120]}')
+          "
+          exit $EXIT_CODE
+
+      - name: 上传报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeguard-report
+          path: codeguard_result.json
+          retention-days: 30

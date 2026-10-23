@@ -2,18 +2,17 @@
 
 <p align="center">
   <b>AI writes code. CodeGuard keeps it alive.</b><br>
-  <sub>一个 CodeBuddy Skill，在 AI 生成代码的每一刻守护架构、阻断技术债务。</sub>
+  <sub>一个 CodeBuddy Skill + MCP Server，在 AI 生成代码的每一刻守护架构、阻断技术债务。</sub>
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/version-3.1.0-blueviolet" alt="v3.1.0">
   <img src="https://img.shields.io/badge/Python-3.8%2B-blue" alt="Python">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
-  <img src="https://img.shields.io/badge/dependencies-zero-brightgreen" alt="零依赖">
-  <img src="https://img.shields.io/badge/coverage-16%2F16%20categories-9cf" alt="检测覆盖">
+  <img src="https://img.shields.io/badge/required%20dependencies-zero-brightgreen" alt="零必需依赖">
   <img src="https://img.shields.io/badge/MCP-compatible-purple" alt="MCP协议">
   <img src="https://img.shields.io/badge/confidence-0--100-orange" alt="置信度评分">
-  <img src="https://img.shields.io/badge/status-production%20ready-success" alt="状态">
-  <img src="https://img.shields.io/badge/version-2.0.9-blueviolet" alt="v2.0.7">
+  <img src="https://img.shields.io/badge/tests-20%2F20-success" alt="测试">
 </p>
 
 ---
@@ -22,190 +21,152 @@
 
 AI 编程工具每天生成数十亿行代码。但数据不会说谎：
 
-> **GitClear 2025** 分析了 2.11 亿行代码后发现：
-> - 📈 AI 辅助代码**返工率上升 39%**
-> - 📉 重构占比从 24% **骤降至不足 10%**  
-> - 📋 复制粘贴代码**增长 48%**
->
+> **GitClear 2025** 分析了 2.11 亿行代码后发现：AI 辅助代码**返工率上升 39%**、复制粘贴代码**增长 48%**。
 > **CodeRabbit** 审查 470 个 PR 后得出结论：AI 代码产生的 Bug **是人工的 1.7 倍**，安全漏洞高出 **274%**。
+> **Veracode 2025**：45% 的 AI 生成代码未通过安全测试。
 
 这不是工具的错，是**对话式交互的先天缺陷**：每次对话都是独立上下文，AI 天然缺乏对项目全局架构的持续感知。
 
-## 🛡️ The Solution
-
-CodeGuard 建立**三层防线**，在 AI 生成代码的每一刻自动介入：
+## 🛡️ The Solution — 三层防线
 
 ```
  ┌──────────────────────────────────────────────────────────┐
- │  第一层  │  生成前  │  注入架构约束 + FileClassifier     │
- │  第二层  │  生成中  │  逐项自查 + 置信度评分              │
- │  第三层  │  生成后  │  DependencyGraph + 三扫描安全       │
+ │  第一层  │  生成前  │  constraint_injector.py             │
+ │         │         │  注入架构约束 + FileClassifier 差异化  │
+ ├──────────────────────────────────────────────────────────┤
+ │  第二层  │  生成中  │  quality_mid_check.py               │
+ │         │         │  逐项自查，输出 {rule_id, passed,     │
+ │         │         │  confidence, evidence}                │
+ ├──────────────────────────────────────────────────────────┤
+ │  第三层  │  生成后  │  quality_arch/security/modular      │
+ │         │         │  循环依赖 + 三扫描安全 + 闭环审计      │
  └──────────────────────────────────────────────────────────┘
-          ↓ 退出码: 0=PASS / 1=WARN / 2=BLOCK
 ```
 
-**v2.0 新增能力：**
+三层共享同一套规则元数据（`quality_rule_registry.py` 单一事实源），实现「注入约束 ↔ 检出违规」可追溯。
 
-| 能力 | 描述 | 模块 |
-|------|------|------|
-| 🖥️ MCP 协议 | JSON-RPC 2.0 over stdio，Claude Code/Cursor/VS Code 即插即用 | `mcp_server.py` |
-| 📊 置信度评分 | 每条问题 0-100 分 (90+=AST/80+=剥离正则/70+=原始正则) | `IssueCollector` |
-| 📁 文件类型感知 | test/config/generated/migration/doc 6 种类型规则自适应 | `FileClassifier` |
-| 🔄 循环依赖 | DFS 依赖图 A→B→C→A 检测 (置信度 95) | `DependencyGraph` |
-| 🔍 三扫描安全 | 剥离前+后+DOTALL双通道三重匹配去重，消除注释误报 | `_check_security` |
+## ✨ 能力矩阵（v3.1.0）
 
-**实测对比（同一功能，AI 风格 vs 人类风格）：**
+| 维度 | 能力 |
+|---|---|
+| **行业分离** | web / embedded / safety 三行业规则集自动切换（`industry_detector.py` + `.code-guardian/profiles/`） |
+| **C 方言分流** | 通用 C/C++ 与嵌入式 C（MISRA C:2012 子集 / ISR 安全 / volatile / 栈深度）在文件分类层自动分流 |
+| **门禁分级** | 金 / 银 / 铜三级阈值（`_level` 字段一键切换），自定义阈值逐键覆盖 |
+| **自定义规则** | `.code-guardian/rules.json` 声明式规则（正则 + 检测器双通道），存在即生效、优先于内置默认 |
+| **模块化检测** | 跨模块硬编码 / 私有符号越界 / 同名脚本歧义 / 缺接口文档 / 无超时 / 无契约校验 / 无依赖锁定 等 9 条 |
+| **MCP 协议** | JSON-RPC 2.0 over stdio，5 个 Tool，适配 Claude Code / Cursor / VS Code / CodeBuddy |
+| **置信度评分** | 90-100 AST 精确 / 80-89 剥离注释后正则 / 70-79 原始正则 / 60-69 启发式 |
+| **插件架构** | `@register_detector` 装饰器自注册，新增检测器不改编排逻辑 |
+| **商业化分层** | free / pro / team / enterprise 四版功能矩阵（见 SKILL.md） |
 
-| | AI 风格代码 | 人类风格代码 |
-|---|---|---|
-| 安全违规 | **7 BLOCK** | 0 |
-| 圈复杂度 | 10 (临界) | 5 (健康) |
-| 嵌套深度 | 6 层 | 1 层 |
-| 参数数量 | 10 个 | 2 个 |
-| 异常处理 | `except: pass` | `logger.exception()` |
-| 架构分层 | 无 | 清晰 3 层 |
-| **CodeGuard 退出码** | **2 (BLOCK)** | **0 (PASS)** |
+## 📁 目录结构
 
-> ✅ AI 代码被精准拦截，人类代码零误报。
-
-## ⚡ Quick Start
-
-### CodeBuddy Skill 模式
-```bash
-# 一行安装（个人）
-cp -r CodeGuard/ ~/.codebuddy/skills/
-
-# 或团队共享
-cp -r CodeGuard/ .codebuddy/skills/
+```
+.codebuddy/skills/CodeGuard/
+├── SKILL.md                  # Skill 定义（AI 调用入口，含金级门控使用规则）
+├── scripts/                  # 63 个 Python 模块
+│   ├── quality_*.py          #   质量检测引擎（门禁/行业/方言/模块化/覆盖率）
+│   ├── blueprint_*.py        #   架构蓝图生成与 API 抽取
+│   ├── context_*.py          #   L0-L3 分层上下文压缩
+│   ├── impact_*.py           #   四维变更影响分析
+│   ├── dashboard_*.py        #   可视化健康看板
+│   ├── internal/             #   共享基础设施（rules_loader / detector_registry / exceptions）
+│   ├── agents/               #   多 Agent 协作（architect / orchestrator / reviewer）
+│   └── mcp_server.py         #   MCP JSON-RPC 2.0 stdio 服务
+├── rules/                    # 声明式规则集（AI 专项规则包 / MISRA-C 子集）
+├── references/               # 架构规则完整定义（SOLID / 分层 / DRY / 安全红线）
+├── assets/                   # CI/CD（GitHub Actions / GitLab CI）、Dockerfile、全链路脚本
+└── tests/                    # 测试套件 + fixtures（违例/干净双样本，双向验证）
+.code-guardian/               # 本仓库自身门禁配置（金级 + embedded/silver profile）
 ```
 
-### MCP 跨平台模式 (Claude Code / Cursor / VS Code)
-```bash
-# 启动 MCP Server (stdio 模式)
-python scripts/mcp_server.py --project-root .
+## 🚀 快速开始
 
-# 或配置到 MCP 客户端:
-# Claude Code: 在 claude_desktop_config.json 添加
+### 作为 CodeBuddy Skill
+
+将 `.codebuddy/skills/CodeGuard/` 放入项目的 `.codebuddy/skills/` 下即可。当 AI 被要求生成 / 修改 / 重构代码，或提及代码质量、架构、技术债时自动触发。
+
+### CLI
+
+```bash
+# 全量检测（退出码 0=PASS / 1=WARN / 2=BLOCK）
+python .codebuddy/skills/CodeGuard/scripts/quality_check.py --path . --mode team
+
+# 增量检测（只扫 git 变更）
+python .codebuddy/skills/CodeGuard/scripts/quality_check.py --path . --mode diff
+
+# 生成架构约束注入文本（生成前调用）
+python .codebuddy/skills/CodeGuard/scripts/constraint_injector.py --path . --format checklist
+
+# 其他工具
+python .codebuddy/skills/CodeGuard/scripts/blueprint_generator.py --path . --output blueprint.json
+python .codebuddy/skills/CodeGuard/scripts/module_health.py --blueprint blueprint.json
+python .codebuddy/skills/CodeGuard/scripts/dashboard_generator.py --project .
+```
+
+### MCP Server
+
+```json
 {
   "mcpServers": {
     "codeguard": {
       "command": "python",
-      "args": ["path/to/mcp_server.py", "--project-root", "."]
+      "args": [".codebuddy/skills/CodeGuard/scripts/mcp_server.py", "--project-root", "."]
     }
   }
 }
 ```
 
-之后 AI 生成代码时**自动激活**。也可以手动运行：
+暴露 5 个 Tool：`review_file` / `review_diff` / `execute_rules` / `inject_constraints` / `get_industry`。
 
-```bash
-# 增量检测（仅变更文件，秒级）
-python scripts/quality_check.py --path . --mode diff
+## 🔒 金级门禁与自定义规则
 
-# 全量检测
-python scripts/quality_check.py --path . --mode personal
-
-# 团队模式（含命名一致性检查）
-python scripts/quality_check.py --path . --mode team
-```
-
-## 🔍 What It Detects
-
-| 类别 | Python | JS/TS | Java | Go | C# | C/C++ | Rust |
-|------|:------:|:-----:|:----:|:--:|:--:|:-----:|:----:|
-| 圈复杂度 | ✅ AST | ✅ 正则 | ✅ 正则 | ✅ 正则 | ✅ 正则 | ✅ 正则 | ✅ 正则 |
-| 嵌套深度 | ✅ AST | ✅ 大括号 | ✅ 大括号 | — | ✅ 大括号 | ✅ 大括号 | — |
-| 参数数量 | ✅ AST | ✅ 正则 | ✅ 正则 | ✅ 正则 | ✅ 正则 | ✅ 正则 | ✅ 正则 |
-| 类方法数 | ✅ AST | — | ✅ 正则 | — | ✅ 正则 | — | — |
-| 文件大小 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 🔒 安全红线 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 重复代码 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 🏗️ 架构分层 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 异常处理 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 命名一致性 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-
-**安全红线（不可绕过）：**
-- ❌ 硬编码密码/API Key/Token
-- ❌ SQL 字符串拼接（SQL 注入）
-- ❌ `eval()` / `exec()` / `os.system()` 接受外部输入
-- ❌ 日志泄露敏感数据
-- ❌ 空异常处理块
-
-## 🎛️ Custom Rules — 声明式引擎
-
-不需要改代码。在 `.code-guardian/rules.json` 中声明：
+在项目根目录放置 `.code-guardian/rules.json` 即可启用金级门禁。**这是自定义规则文件：方案可直接设定，一旦存在即按设定执行、不采用内置默认。**
 
 ```json
 {
+  "_level": "gold",
+  "thresholds": { "cyclomatic_complexity_block": 10, "max_nesting_block": 4 },
   "rules": [
     {
-      "id": "TEAM_NO_DIRECT_DB",
-      "description": "Controller 层禁止直接访问数据库",
+      "id": "GOLD_NO_BARE_EXCEPT",
       "severity": "block",
-      "target": "presentation",
-      "pattern": "(?:DatabaseConnection|db\\.execute|Session\\(\\))",
-      "message": "Controller 直接访问数据库",
-      "suggestion": "通过 Service 层封装所有数据操作"
+      "target": "python",
+      "pattern": "except\\s*:",
+      "message": "禁止裸 except",
+      "suggestion": "捕获具体异常类型并记录日志"
     }
   ]
 }
 ```
 
-支持的作用域过滤：`domain` | `application` | `infrastructure` | `presentation` | `python` | `javascript` | `java` | `go` | 文件名 glob 模式 | `all`
+完整使用规则（定位顺序、字段表、三级阈值基准、叠加语义、边界）见 [`SKILL.md`](.codebuddy/skills/CodeGuard/SKILL.md) 的「`.code-guardian/rules.json` 金级门控使用规则」专节。
 
-## 🤖 Multi-Agent Mode
+## 🧪 测试
 
-在 CodeBuddy Team Mode 下拆分为三个并行 Agent：
+零依赖内置 runner，无需 pytest：
 
-| Agent | 角色 | 职责 |
-|-------|------|------|
-| **CodeGuard-architect** | 架构师 | 注入项目架构约束 |
-| **CodeGuard-generator** | 生成者 | 在约束下生成代码 |
-| **CodeGuard-reviewer** | 审查者 | 执行质量门禁 |
+```bash
+python .codebuddy/skills/CodeGuard/tests/test_modularity.py    # 9 项
+python .codebuddy/skills/CodeGuard/tests/test_empty_except.py  # 11 项
+```
 
-完整消息协议参见 [SKILL.md](CodeGuard/SKILL.md)。
+违例样本必须"全中"、干净样本必须"零误报"——双向验证，只测前者会漏掉误报。
 
-## 📊 Evidence-Based Design
+## ⚠️ 已知缺口（如实披露）
 
-CodeGuard 的每一条规则都有独立的实证研究支撑：
+v3.1.0 为在途版本：以**默认金级门禁**自检 `scripts/`，当前有 **169 个 BLOCK**（跨文件/文件内重复 102、圈复杂度 38、嵌套 20、文件规模 3、参数 2），集中在蓝图抽取与影响分析相关模块。功能完整、测试 20/20 通过、模块导入 29/29 通过；金级清理（拆函数 / 去重）列为后续工作，不在本版本范围内。
 
-| 数据源 | 规模 | 关键发现 |
-|--------|------|---------|
-| GitClear | 2.11 亿行 | AI 代码返工率 +39% |
-| Sonar | 4,400 任务 | 89.3% AI 问题为代码异味 |
-| DORA 2024 | 3.6 万团队 | AI 采纳增加 25% → 交付稳定性下降 7.2% |
-| CodeRabbit | 470 PR | AI 代码安全漏洞 +274% |
-| Veracode | 企业级 | 45% AI 代码未通过安全测试 |
-| METR RCT | 16 资深开发者 | 使用 AI 实际慢 19%，自认快 20% |
+## 📊 规则设计依据
 
-## 🧪 We Eat Our Own Dog Food
-
-CodeGuard 用自己审查自己。自检测试中发现了 `constraint_injector.py` 的一处空异常处理并已修复。**v1.2.0 自身代码通过全部检测。**
-
-## 📦 Tech Stack
-
-- **纯 Python 3.8+ 标准库** — 零 `pip install`
-- **跨平台** — Windows / macOS / Linux
-- **内存友好** — 500 文件项目 < 1MB，10,000 文件项目 < 15MB
-- **秒级响应** — 500 文件 < 1s，增量模式毫秒级
-
-## 🗺️ Roadmap
-
-- [x] 三层防线（注入 → 自查 → 门禁）
-- [x] 声明式自定义规则引擎
-- [x] 多 Agent 协作支持
-- [x] 多语言架构检测（7 种语言）
-- [x] 增量模式（git diff）
-- [ ] IDE 实时提示集成
-- [ ] 趋势面板（技术债务变化追踪）
-- [ ] SonarQube / ESLint 互操作
+| 数据源 | 关键发现 | 对应规则 |
+|--------|---------|---------|
+| GitClear 2025（2.11 亿行） | 返工率 +39%，复制粘贴 +48% | 重复代码检测、重构提醒 |
+| Sonar 2026 | >90% 问题为代码异味 | 圈复杂度、类大小限制 |
+| DORA 2024 | AI 采纳 +25% → 交付稳定性 −7.2% | 增量检测模式、度量指标 |
+| CodeRabbit 2025（470 PR） | AI 代码问题 1.7x，安全漏洞 +274% | 安全红线、复杂度门禁 |
+| Veracode 2025 | 45% AI 代码未通过安全测试 | 硬编码密钥、SQL 注入检测 |
 
 ## 📄 License
 
-MIT — 自由使用、修改、分发。
-
----
-
-<p align="center">
-  <sub>Built with data, verified by research, tested on itself.</sub>
-</p>
+[MIT](LICENSE) © 2026 Code Guardian

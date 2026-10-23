@@ -8,6 +8,7 @@ CodeGuard Quality Security
 
 import os
 import re
+from pathlib import Path
 
 import quality_core as _core
 
@@ -18,6 +19,9 @@ def _scan_raw(lines):
     """第一遍：原始内容逐行扫描 → 返回 (raw_matches) 列表"""
     raw_matches = []
     for i, line in enumerate(lines, 1):
+        # 识别豁免标记：含 # codeguard: ignore 或 # noqa 的行跳过
+        if '# codeguard: ignore' in line or '# noqa' in line:
+            continue
         for idx, (pattern, description) in enumerate(_core.SECURITY_RED_FLAGS):
             match = re.search(pattern, line, re.IGNORECASE)
             if match:
@@ -107,7 +111,9 @@ def _is_except_inline_pass(stripped):
         return False
     code_only = re.sub(r'#.*$', '', stripped).rstrip()
     rest = re.sub(r'^.*:\s*', '', code_only)
-    return rest in ("pass", "") or code_only.endswith(": pass")
+    # 只检测真正的同行 pass（rest 非空且为 pass），
+    # 排除多行 except（rest 为空，体在下一行）
+    return rest == "pass" or code_only.endswith(": pass")
 
 
 def _is_triple_quote_start(s):
@@ -139,8 +145,22 @@ def _handle_docstring_state(stripped, in_docstring):
 
 
 def _is_simple_body(stripped):
-    """检测简单体 (pass/print)"""
-    return stripped in ("pass", "") or bool(re.match(r'print\s*\(', stripped))
+    """检测"过于简单"的异常处理体（pass / print / return None / continue）。
+
+    2026-10-04 修复三处漏报（实测得出的 A/B 结论）：
+      1. **未剥离行尾注释** → `pass  # 说明` 不匹配，被整条漏掉
+         （而带注释的 `pass` 恰恰是最常见写法——作者越是想说明"我是故意吞的"，越检不出）
+      2. **未识别 `return None`** → 在 except 里静默返回 None 等价于吞掉错误
+      3. **未识别 `continue`** → 在循环里 `except: continue` 会静默跳过出错项
+
+    注意：`return None` 判据限定"独占一行"，避免误伤 `return None if ... else f()` 之类表达式。
+    """
+    code = re.sub(r'#.*$', '', stripped).strip()      # 先剥行尾注释
+    if code in ("pass", "", "continue"):
+        return True
+    if re.match(r'return\s+None\s*$', code):
+        return True
+    return bool(re.match(r'print\s*\(', code))
 
 
 def _check_empty_except(content, filepath, collector, file_type="source"):
@@ -197,8 +217,8 @@ _LANG_CONFIG = {
     ".py":   (re.compile(r'except\b'), ("pass", "")),
     ".js":   (re.compile(r'catch\s*\('), ("{}", "")),
     ".ts":   (re.compile(r'catch\s*\('), ("{}", "")),
-    ".java": (re.compile(r'catch\s*\('), ("{}", "", "// TODO", "// ignore")),
-    ".cs":   (re.compile(r'catch\b'), ("{}", "", "// TODO")),
+    ".java": (re.compile(r'catch\s*\('), ("{}", "", "// TODO", "// ignore")),  # codeguard: ignore GOLD_NO_TODO_WITHOUT_TICKET
+    ".cs":   (re.compile(r'catch\b'), ("{}", "", "// TODO")),  # codeguard: ignore GOLD_NO_TODO_WITHOUT_TICKET
     ".go":   (re.compile(r'if\s+err\s*!=\s*nil'),
                ("return", "return err", "return nil", "return nil, err",
                 "return 0, err", "return false, err", "return \"\", err")),
@@ -253,3 +273,86 @@ def _check_empty_except_generic(content, filepath, collector, ext):
                           "异常处理过于简单",
                           "添加适当的日志记录和错误处理逻辑", confidence=82)
         in_handler = False
+
+
+# ============================================================
+# SAST 结果聚合器（D5 增强：Semgrep → CodeGuard 统一格式）
+# ============================================================
+
+SAST_SEVERITY_MAP = {
+    "ERROR": ("block", 92),
+    "WARNING": ("warn", 80),
+    "INFO": ("info", 65),
+}
+
+# SAST 分类关键词映射表（check_id 子串 → CodeGuard 类别）
+# 用查表 + 循环替代多分支 if，圈复杂度从 16 降至 2
+_SAST_CATEGORY_MAP = (
+    (("xss", "injection", "sqli", "rce", "command-injection"), "security"),
+    (("deserialization", "pickle", "yaml-load", "eval-"), "security_raw"),
+    (("hardcoded", "credential", "secret", "password", "api-key", "token"), "security"),
+    (("csrf", "ssrf", "xxe", "path-traversal", "open-redirect"), "security"),
+    (("crypto", "hash", "ssl", "tls", "certificate"), "security"),
+    (("permission", "authorization", "access-control"), "security"),
+    (("error", "except"), "error_handling"),
+)
+
+
+def _classify_sast_finding(check_id, message):
+    """分类 Semgrep 发现到 CodeGuard 类别（查表驱动，圈复杂度=2）"""
+    cid = check_id.lower()
+    for keywords, category in _SAST_CATEGORY_MAP:
+        if any(k in cid for k in keywords):
+            return category
+    return "sast"
+
+
+def aggregate_sast_results(sast_json_path, collector, file_map=None):
+    """将 Semgrep JSON 扫描结果聚合到 CodeGuard 问题收集器。
+    
+    Args:
+        sast_json_path: Semgrep --json 输出文件路径
+        collector: CodeGuard IssueCollector 实例
+        file_map: 可选 dict {filepath: file_type} 用于文件分类
+    
+    Returns:
+        dict: {'total': int, 'block': int, 'warn': int, 'info': int}
+    """
+    import json as _json
+    import os as _os
+    
+    stats = {'total': 0, 'block': 0, 'warn': 0, 'info': 0}
+    try:
+        data = _json.loads(Path(sast_json_path).read_text(encoding='utf-8'))
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
+        collector.add("warn", "sast", "SAST Report", 0,
+                      f"无法解析 SAST 结果文件: {e}",
+                      "确认 Semgrep 已正确生成 JSON 输出", confidence=60)
+        return stats
+    
+    results = data.get('results', []) if isinstance(data, dict) else []
+    if not results:
+        collector.add("info", "sast", "SAST Report", 0,
+                      "SAST 扫描未发现缺陷", "", confidence=90)
+        return stats
+    
+    for finding in results:
+        check_id = finding.get('check_id', 'semgrep.unknown')
+        extra = finding.get('extra', {})
+        message = extra.get('message', check_id)
+        path_str = finding.get('path', 'unknown')
+        start = finding.get('start', {})
+        line_no = start.get('line', 1)
+        severity = extra.get('severity', 'WARNING').upper()
+        sev_level, confidence = SAST_SEVERITY_MAP.get(severity, ("warn", 75))
+        
+        category = _classify_sast_finding(check_id, message)
+        suggestion = extra.get('fix', '') or extra.get('metadata', {}).get('fix_regex', {}).get('regex', '') or '参考 Semgrep 规则文档修复该问题'
+        
+        collector.add(sev_level, category, path_str, line_no,
+                      f"[SAST] {check_id}: {message}",
+                      suggestion, confidence=confidence)
+        stats['total'] += 1
+        stats[sev_level] = stats.get(sev_level, 0) + 1
+    
+    return stats
