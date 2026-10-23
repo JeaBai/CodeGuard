@@ -57,7 +57,6 @@ AI 编程工具每天生成数十亿行代码。但数据不会说谎：
 | **MCP 协议** | JSON-RPC 2.0 over stdio，5 个 Tool，适配 Claude Code / Cursor / VS Code / CodeBuddy |
 | **置信度评分** | 90-100 AST 精确 / 80-89 剥离注释后正则 / 70-79 原始正则 / 60-69 启发式 |
 | **插件架构** | `@register_detector` 装饰器自注册，新增检测器不改编排逻辑 |
-| **商业化分层** | free / pro / team / enterprise 四版功能矩阵（见 SKILL.md） |
 
 ## 📦 套件成员（本仓库同时是六个技能的统一安装包）
 

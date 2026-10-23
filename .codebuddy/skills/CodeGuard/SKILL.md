@@ -177,30 +177,20 @@ agent_created: true
 - 交互式问题列表（一键修复/查看详情/人工确认）
 - 响应式设计，移动端/平板/桌面自适应
 
-## 商业化模式
+## 嵌入式与工具链检测项（全量开放，无版本门控）
 
-| 版本 | 嵌入式检测 | 其他功能 | 定价 |
-|------|-----------|---------|------|
-| **免费版** | - | 基础AST检测、安全扫描、模板引擎、看板 | 免费 |
-| **专业版** | MISRA-C基础7条 (pro+) | 蓝图生成、上下文压缩、自定义规则、中风险确认 | 按月 |
-| **团队版** | +ISR优先级/看门狗/电源管理 (team+) | 重构队列、快照回滚、文件锁、影响分析、团队协作 | 按月 |
-| **企业版** | +工具链/链接脚本/启动文件/Hex/Rust (enterprise) | SSO、私有部署、审计日志、SLA、飞控检测 | 年度合同 |
+以下检测器全部随技能发布，`register_detector(dialect, category)` 注册即生效，**代码层面没有任何版本/授权门控**：
 
-### 嵌入式检测功能矩阵
-
-| 功能 | free | pro | team | enterprise |
-|------|:----:|:---:|:----:|:----------:|
-| MISRA-C基础(类型声明/switch默认/动态内存禁用/void参数) | - | ✅ | ✅ | ✅ |
-| MISRA-C扩展(指针越界/返回值忽略/符号转换/枚举) | - | - | ✅ | ✅ |
-| ISR优先级分组检测 | - | - | ✅ | ✅ |
-| 看门狗配置与喂狗检测 | - | - | ✅ | ✅ |
-| 电源管理(WFI/WFE)合理性 | - | - | ✅ | ✅ |
-| 启动文件(startup_*.s)向量表分析 | - | - | - | ✅ |
-| 链接脚本(.ld)内存布局分析 | - | - | - | ✅ |
-| Makefile/CMake工具链检测 | - | - | - | ✅ |
-| Hex/Bin产物校验 | - | - | - | ✅ |
-| Rust embedded(no_std/cortex_m)方言 | - | - | - | ✅ |
-| 飞控硬件检测(引脚/串口/刷新率/状态机) | - | - | - | ✅ |
+| 检测项 | 实现 |
+|---|---|
+| MISRA-C 子集：动态内存禁用 / 递归 / goto / ISR 安全 / volatile / 栈深度 | `quality_embedded.py`（6 个 detector） |
+| ISR 优先级分组 / 看门狗喂狗 / 电源管理（WFI/WFE） | `quality_embedded.py`（Phase 3 扩展） |
+| 启动文件（`startup_*.s`）向量表 / 栈堆配置 | `quality_startup.py` |
+| 链接脚本（`.ld`）RAM/Flash 与段布局 | `quality_linker.py` |
+| Makefile/CMake 交叉编译 / LTO / 警告配置 | `quality_toolchain.py` |
+| Hex/Bin 产物校验（校验和 / 向量表偏移） | `quality_artifact.py` |
+| Rust embedded 方言（`no_std` / `cortex_m` / `embedded_hal`） | `quality_c_dialect.py` |
+| 飞控硬件（引脚 / 串口 / 刷新率 / 状态机） | `fc-guardian` 技能 |
 
 ### 检测器插件架构
 
