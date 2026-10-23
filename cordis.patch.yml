@@ -1,0 +1,45 @@
+# CodeGuard — DeepSeek Harness (dsh) 组合包补丁
+#
+# 本文件由 package.json 的 dsh.bundle.patch 声明，安装并启用后作为一层 patch 应用。
+# 挂载两件事（互相独立，任一失败不影响另一件与 dsh 启动）：
+#
+#   1) 技能源（skill-filesystem-codeguard）
+#      把本包内的 .codebuddy/skills 注册为技能目录，CodeGuard/SKILL.md 随之进入
+#      会话技能目录，由模型按任务渐进式加载。本行不依赖本机 Python。
+#
+#   2) MCP 服务（mcp-codeguard）
+#      把 CodeGuard 的 Python MCP Server 注册为 stdio 服务器，工具以
+#      mcp__codeguard__<tool> 形式暴露：review_file / review_diff /
+#      execute_rules / inject_constraints / get_industry。
+#      需要 python 在 PATH 中；缺失时该行自动降级（不影响技能行与 dsh 启动）。
+#
+# 路径均用 baseUrl（= 本 patch 文件所在目录，即包根）自解析，不写死绝对路径。
+#
+# 覆盖方式：在本 profile 的 cordis.patch.yml 里按 id 重写这两行的 config
+# （profile 层最后应用，last write wins）。例如固定 Python 解释器：
+#
+#   - id: mcp-codeguard
+#     name: '@deepseek-ai/dsh-mcp-client'
+#     config:
+#       serverName: codeguard
+#       transport: stdio
+#       command: 'C:/Python313/python.exe'
+#       args: ['<mcp_server.py 绝对路径>']
+
+- insert:
+    - id: skill-filesystem-codeguard
+      name: '@deepseek-ai/dsh-skill-filesystem'
+      config:
+        providerName: codeguard
+        customSkillDirs:
+          - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:url').fileURLToPath(baseUrl), '.codebuddy', 'skills')
+        watch: true
+
+    - id: mcp-codeguard
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: codeguard
+        transport: stdio
+        command: python
+        args:
+          - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:url').fileURLToPath(baseUrl), '.codebuddy', 'skills', 'CodeGuard', 'scripts', 'mcp_server.py')

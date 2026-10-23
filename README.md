@@ -119,6 +119,21 @@ python .codebuddy/skills/CodeGuard/scripts/dashboard_generator.py --project .
 
 暴露 5 个 Tool：`review_file` / `review_diff` / `execute_rules` / `inject_constraints` / `get_industry`。
 
+## 作为 DeepSeek Harness (dsh) 插件安装
+
+本仓库同时是一个 dsh **组合包**（`package.json` 声明 `dsh.bundle`，补丁见 `cordis.patch.yml`）：
+
+```bash
+pnpm add https://github.com/JeaBai/CodeGuard
+```
+
+安装后在插件管理中**启用** `codeguard`（或把 `"codeguard"` 加进 profile `package.json` 的 `dsh.profile.bundles`），按提示重启 profile 后生效。挂载两件事，互相独立：
+
+1. **技能源**：`.codebuddy/skills` 注册为技能目录，CodeGuard 进入会话技能目录，由模型按任务渐进式加载（不依赖本机 Python）；
+2. **MCP 服务**：CodeGuard 的 Python MCP Server 注册为 stdio 服务器，工具以 `mcp__codeguard__review_file` 等形式暴露（需要 `python` 在 PATH 中；缺失时该行自动降级，不影响技能与 dsh 启动）。
+
+如需固定 Python 解释器路径，在 profile 的 `cordis.patch.yml` 里按 id 覆盖 `mcp-codeguard` 行的 `command` 即可（profile 层最后应用，last write wins）。
+
 ## 🔒 金级门禁与自定义规则
 
 在项目根目录放置 `.code-guardian/rules.json` 即可启用金级门禁。**这是自定义规则文件：方案可直接设定，一旦存在即按设定执行、不采用内置默认。**

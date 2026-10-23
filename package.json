@@ -1,0 +1,15 @@
+{
+  "name": "codeguard",
+  "version": "3.1.0",
+  "description": "AI 代码质量守护 Skill + MCP Server — 三层防线 / 行业分离 / C 方言分流 / 金级门禁（DeepSeek Harness 组合包）",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JeaBai/CodeGuard.git"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
